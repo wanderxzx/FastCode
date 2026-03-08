@@ -7,7 +7,7 @@ repo_root: ./repos # safe repository path
 
 # Repository Settings
 repository:
-  clone_depth: 1  # Shallow clone for faster processing
+  clone_depth: 10  # Clone at least 10 commits for commit analysis
   max_file_size_mb: 5  # Skip files larger than this
   backup_directory: "./repo_backup"  # Backup replaced repos before overwrite
   ignore_patterns:

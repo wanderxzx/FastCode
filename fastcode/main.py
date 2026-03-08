@@ -303,6 +303,7 @@ class FastCode:
               session_id: Optional[str] = None,
               enable_multi_turn: Optional[bool] = None,
               use_agency_mode: Optional[bool] = None,
+              commit_hash: Optional[str] = None,
               prompt_builder: Optional[Callable[[str, str, Optional[Dict[str, Any]], Optional[List[Dict[str, Any]]]], str]] = None) -> Dict[str, Any]:
         """
         Query the repository (or multiple repositories)
@@ -313,6 +314,7 @@ class FastCode:
             repo_filter: Optional list of repository names to search in
             session_id: Optional session ID for multi-turn dialogue
             enable_multi_turn: Override config setting for multi-turn mode
+            commit_hash: Optional commit hash for commit-level analysis
             prompt_builder: Optional callable to build a custom LLM prompt using
                 (question, prepared_context, query_info, dialogue_history)
         
@@ -325,6 +327,19 @@ class FastCode:
         # Determine if multi-turn mode is enabled
         if enable_multi_turn is None:
             enable_multi_turn = self.config.get("generation", {}).get("enable_multi_turn", False)
+
+        # Get commit diff information if commit_hash is provided
+        commit_info = None
+        if commit_hash:
+            try:
+                diff_info = self.get_commit_diff(commit_hash)
+                if diff_info:
+                    commit_info = diff_info
+                    self.logger.info(f"Retrieved commit diff info for {commit_hash}")
+                else:
+                    self.logger.warning(f"Could not get commit diff for {commit_hash}")
+            except Exception as e:
+                self.logger.error(f"Error getting commit diff: {e}")
         
         if repo_filter:
             self.logger.info(f"Processing query: {question} in repositories: {repo_filter}")
@@ -405,11 +420,21 @@ class FastCode:
                     dialogue_history=dialogue_history if enable_multi_turn else None
                 )
                 
+                # Enhance with call graph context for commit analysis
+                if commit_info and commit_info.get('file_diffs'):
+                    self.logger.info("Enhancing retrieval with call graph context for commit analysis")
+                    retrieved = self._enhance_with_call_graph_context(retrieved, commit_info)
+                
                 # Generate answer (with dialogue history for multi-turn)
+                # Add commit_info to query_info if available
+                query_info_dict = processed_query.to_dict()
+                if commit_info:
+                    query_info_dict['commit_info'] = commit_info
+                
                 result = self.answer_generator.generate(
                     question,
                     retrieved,
-                    query_info=processed_query.to_dict(),
+                    query_info=query_info_dict,
                     dialogue_history=self._get_full_dialogue_history(session_id, enable_multi_turn),
                     prompt_builder=prompt_builder
                 )
@@ -469,6 +494,7 @@ class FastCode:
                     session_id: Optional[str] = None,
                     enable_multi_turn: Optional[bool] = None,
                     use_agency_mode: Optional[bool] = None,
+                    commit_hash: Optional[str] = None,
                     prompt_builder: Optional[Callable[[str, str, Optional[Dict[str, Any]], Optional[List[Dict[str, Any]]]], str]] = None):
         """
         Query the repository with streaming response (yields answer chunks)
@@ -480,6 +506,7 @@ class FastCode:
             session_id: Optional session ID for multi-turn dialogue
             enable_multi_turn: Override config setting for multi-turn mode
             use_agency_mode: Override config setting for agency mode
+            commit_hash: Optional commit hash for commit-level analysis
             prompt_builder: Optional callable to build custom LLM prompt
 
         Yields:
@@ -496,6 +523,19 @@ class FastCode:
         # Determine if multi-turn mode is enabled
         if enable_multi_turn is None:
             enable_multi_turn = self.config.get("generation", {}).get("enable_multi_turn", False)
+
+        # Get commit diff information if commit_hash is provided
+        commit_info = None
+        if commit_hash:
+            try:
+                diff_info = self.get_commit_diff(commit_hash)
+                if diff_info:
+                    commit_info = diff_info
+                    self.logger.info(f"Retrieved commit diff info for {commit_hash}")
+                else:
+                    self.logger.warning(f"Could not get commit diff for {commit_hash}")
+            except Exception as e:
+                self.logger.error(f"Error getting commit diff: {e}")
 
         if repo_filter:
             self.logger.info(f"Processing streaming query: {question} in repositories: {repo_filter}")
@@ -552,6 +592,11 @@ class FastCode:
                 dialogue_history=dialogue_history if enable_multi_turn else None
             )
 
+            # Enhance with call graph context for commit analysis
+            if commit_info and commit_info.get('file_diffs'):
+                self.logger.info("Enhancing retrieval with call graph context for commit analysis")
+                retrieved = self._enhance_with_call_graph_context(retrieved, commit_info)
+
             # Notify start of generation
             yield None, {"status": "generating", "retrieved_count": len(retrieved)}
 
@@ -559,10 +604,15 @@ class FastCode:
             full_answer_parts = []
             answer_metadata = {}
 
+            # Add commit_info to query_info if available
+            query_info_dict = processed_query.to_dict()
+            if commit_info:
+                query_info_dict['commit_info'] = commit_info
+            
             for chunk, metadata in self.answer_generator.generate_stream(
                 question,
                 retrieved,
-                query_info=processed_query.to_dict(),
+                query_info=query_info_dict,
                 dialogue_history=self._get_full_dialogue_history(session_id, enable_multi_turn),
                 prompt_builder=prompt_builder
             ):
@@ -659,6 +709,181 @@ class FastCode:
         
         return "\n".join(summary_parts)
     
+    def get_commits(self, max_count: int = 50) -> List[Dict[str, Any]]:
+        """
+        Get list of commits from the loaded repository
+        
+        Args:
+            max_count: Maximum number of commits to retrieve
+        
+        Returns:
+            List of commit dictionaries
+        """
+        if not self.repo_loaded:
+            raise RuntimeError("No repository loaded. Call load_repository() first.")
+        
+        return self.loader.get_commit_list(max_count)
+    
+    def get_commit_diff(self, commit_hash: str) -> Dict[str, Any]:
+        """
+        Get diff information for a specific commit
+        
+        Args:
+            commit_hash: Full or short commit hash
+        
+        Returns:
+            Dictionary with diff information
+        """
+        if not self.repo_loaded:
+            raise RuntimeError("No repository loaded. Call load_repository() first.")
+        
+        return self.loader.get_commit_diff(commit_hash)
+    
+    def checkout_commit(self, commit_hash: str) -> bool:
+        """
+        Checkout a specific commit and re-index the repository
+        
+        Args:
+            commit_hash: Full or short commit hash
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.repo_loaded:
+            raise RuntimeError("No repository loaded. Call load_repository() first.")
+        
+        success = self.loader.checkout_commit(commit_hash)
+        if success:
+            # Re-index the repository after checkout
+            self.logger.info(f"Re-indexing repository after checkout to commit {commit_hash}")
+            self.index_repository(force=True)
+        
+        return success
+    
+    def checkout_branch(self, branch_name: str) -> bool:
+        """
+        Checkout a specific branch and re-index the repository
+        
+        Args:
+            branch_name: Name of the branch to checkout
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.repo_loaded:
+            raise RuntimeError("No repository loaded. Call load_repository() first.")
+        
+        success = self.loader.checkout_branch(branch_name)
+        if success:
+            # Re-index the repository after checkout
+            self.logger.info(f"Re-indexing repository after checkout to branch {branch_name}")
+            self.index_repository(force=True)
+        
+        return success
+    
+    def _enhance_with_call_graph_context(self, retrieved: List[Dict[str, Any]], 
+                                         commit_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Enhance retrieved elements with call graph context for commit analysis
+        
+        For each modified function in the commit, find its callers and callees
+        to provide a more complete view of the changes' impact.
+        
+        Note: This assumes the repository has been re-indexed after the commit
+        was made, so all modified functions exist in the graph.
+        
+        Args:
+            retrieved: List of already retrieved elements
+            commit_info: Commit information with file diffs
+        
+        Returns:
+            Enhanced list of retrieved elements with call graph context
+        """
+        if not commit_info.get('file_diffs'):
+            return retrieved
+        
+        import re
+        
+        # Track elements to avoid duplicates
+        element_ids = {elem.get('element', {}).get('id') for elem in retrieved}
+        added_elements_count = 0
+        
+        # For each modified file, find related functions through call graph
+        for file_path, file_info in commit_info['file_diffs'].items():
+            diff_text = file_info.get('diff', '')
+            if not diff_text:
+                continue
+            
+            # Extract function names from diff (simple heuristic)
+            # Look for function definitions that were added or modified
+            modified_functions = set()
+            for line in diff_text.split('\n'):
+                # Match Python function definitions
+                if line.startswith('+') and 'def ' in line:
+                    # Extract function name
+                    match = re.search(r'def\s+(\w+)\s*\(', line)
+                    if match:
+                        modified_functions.add(match.group(1))
+                # Match class definitions
+                elif line.startswith('+') and 'class ' in line:
+                    match = re.search(r'class\s+(\w+)', line)
+                    if match:
+                        modified_functions.add(match.group(1))
+            
+            # Process each modified function
+            for func_name in modified_functions:
+                # Find the element in the graph builder
+                element = self.graph_builder.element_by_name.get(func_name)
+                if not element:
+                    self.logger.debug(f"Function {func_name} not found in graph. "
+                                    "Make sure to re-index the repository after committing changes.")
+                    continue
+                
+                elem_id = element.id
+                if elem_id in element_ids:
+                    continue  # Already in retrieved
+                
+                # Get callers (functions that call this function)
+                callers = self.graph_builder.get_callers(elem_id)
+                for caller_id in callers[:3]:  # Limit to 3 callers
+                    if caller_id in element_ids:
+                        continue
+                    
+                    caller_elem = self.graph_builder.element_by_id.get(caller_id)
+                    if caller_elem:
+                        element_ids.add(caller_id)
+                        retrieved.append({
+                            'element': caller_elem.to_dict(),
+                            'total_score': 0.5,
+                            'retrieval_method': 'call_graph_caller',
+                            'related_commit_file': file_path
+                        })
+                        added_elements_count += 1
+                
+                # Get callees (functions called by this function)
+                callees = self.graph_builder.get_callees(elem_id)
+                for callee_id in callees[:3]:  # Limit to 3 callees
+                    if callee_id in element_ids:
+                        continue
+                    
+                    callee_elem = self.graph_builder.element_by_id.get(callee_id)
+                    if callee_elem:
+                        element_ids.add(callee_id)
+                        retrieved.append({
+                            'element': callee_elem.to_dict(),
+                            'total_score': 0.5,
+                            'retrieval_method': 'call_graph_callee',
+                            'related_commit_file': file_path
+                        })
+                        added_elements_count += 1
+        
+        if added_elements_count > 0:
+            self.logger.info(f"Enhanced retrieval with {added_elements_count} call graph elements")
+        
+        return retrieved
+    
+    
+    
     def _try_load_from_cache(self) -> bool:
         """Try to load indexed data from cache for single repository"""
         if not self._should_use_cache():
@@ -722,6 +947,12 @@ class FastCode:
         try:
             if cache_name is None:
                 cache_name = self._get_cache_name()
+            
+            # Save repo_info to a separate file
+            repo_info_path = os.path.join(self.vector_store.persist_dir, f"{cache_name}_repo_info.pkl")
+            with open(repo_info_path, 'wb') as f:
+                pickle.dump(self.repo_info, f)
+            
             self.vector_store.save(cache_name)
             self.logger.info(f"Saved index to cache: {cache_name}")
         except Exception as e:
@@ -1168,9 +1399,81 @@ class FastCode:
                 self.vector_store.initialize(self.embedder.embedding_dim)
             
             # Load each repository index and merge them
+            first_repo = True
+            repo_info_loaded = False
+            
             for repo_name in repos_to_load:
                 self.logger.info(f"Loading index for {repo_name}...")
                 try:
+                    # Load repo_info for the first repository
+                    if first_repo and not repo_info_loaded:
+                        repo_info_path = os.path.join(persist_dir, f"{repo_name}_repo_info.pkl")
+                        if os.path.exists(repo_info_path):
+                            try:
+                                with open(repo_info_path, 'rb') as f:
+                                    self.repo_info = pickle.load(f)
+                                    self.repo_name = self.repo_info.get("name", repo_name)
+                                    # Set loader.repo_path if available
+                                    if "path" in self.repo_info:
+                                        self.loader.repo_path = self.repo_info["path"]
+                                        self.repo_loaded = True
+                                        repo_info_loaded = True
+                                    self.logger.info(f"Loaded repo_info for {repo_name}: {self.repo_info.get('path')}")
+                            except Exception as e:
+                                self.logger.warning(f"Failed to load repo_info for {repo_name}: {e}")
+                        
+                        # If repo_info.pkl doesn't exist, try to construct minimal repo_info
+                        if not repo_info_loaded:
+                            self.logger.warning(f"No repo_info.pkl found for {repo_name}, attempting to construct minimal repo_info")
+                            
+                            # Try multiple strategies to find repo_path
+                            possible_paths = []
+                            
+                            # Strategy 1: Try to get repo_path from vector_store metadata
+                            if self.vector_store.metadata and len(self.vector_store.metadata) > 0:
+                                sample = self.vector_store.metadata[0]
+                                file_path = sample.get("file_path") or sample.get("relative_path")
+                                if file_path:
+                                    # Extract repo path from file path
+                                    repo_path = os.path.dirname(os.path.dirname(file_path)) if os.path.sep in file_path else os.path.dirname(file_path)
+                                    if os.path.exists(repo_path) and os.path.exists(os.path.join(repo_path, ".git")):
+                                        possible_paths.append(os.path.abspath(repo_path))
+                            
+                            # Strategy 2: Try repos directory
+                            repos_dir = self.config.get("repo_root", "./repos")
+                            repo_in_repos = os.path.join(repos_dir, repo_name)
+                            if os.path.exists(repo_in_repos) and os.path.exists(os.path.join(repo_in_repos, ".git")):
+                                possible_paths.append(os.path.abspath(repo_in_repos))
+                            
+                            # Strategy 3: Try current directory
+                            if os.path.exists(repo_name) and os.path.exists(os.path.join(repo_name, ".git")):
+                                possible_paths.append(os.path.abspath(repo_name))
+                            
+                            # Use the first valid path found
+                            if possible_paths:
+                                self.repo_info = {
+                                    "name": repo_name,
+                                    "path": possible_paths[0],
+                                    "file_count": len(self.vector_store.metadata),
+                                }
+                                self.loader.repo_path = self.repo_info["path"]
+                                self.repo_loaded = True
+                                repo_info_loaded = True
+                                self.logger.info(f"Constructed repo_info from search: {self.repo_info.get('path')}")
+                            else:
+                                # No valid repo path found, set minimal info
+                                self.logger.warning(f"Could not find valid repo path for {repo_name}, setting minimal repo_info")
+                                self.repo_info = {
+                                    "name": repo_name,
+                                    "path": None,
+                                    "file_count": len(self.vector_store.metadata) if self.vector_store.metadata else 0,
+                                }
+                                self.repo_name = repo_name
+                                self.repo_loaded = True
+                                repo_info_loaded = True
+                        
+                        first_repo = False
+                    
                     # Merge this repository's index into the main vector store
                     if self.vector_store.merge_from_index(repo_name):
                         self.logger.info(f"Successfully merged {repo_name}")

@@ -28,7 +28,7 @@ class RepositoryLoader:
         self.repo_config = config.get("repository", {})
         self.logger = logging.getLogger(__name__)
         
-        self.clone_depth = self.repo_config.get("clone_depth", 1)
+        self.clone_depth = self.repo_config.get("clone_depth", 10)
         self.max_file_size_mb = self.repo_config.get("max_file_size_mb", 5)
         self.ignore_patterns = self.repo_config.get("ignore_patterns", [])
         self.supported_extensions = self.repo_config.get("supported_extensions", [])
@@ -370,6 +370,233 @@ class RepositoryLoader:
         })
         
         return info
+    
+    def get_commit_list(self, max_count: int = 50) -> List[Dict[str, Any]]:
+        """
+        Get list of commits from the repository
+        
+        Args:
+            max_count: Maximum number of commits to retrieve
+        
+        Returns:
+            List of commit dictionaries with hash, message, author, date, etc.
+        """
+        if not self.repo_path:
+            raise RuntimeError("No repository loaded")
+        
+        try:
+            repo = Repo(self.repo_path)
+            commits = []
+            
+            for commit in repo.iter_commits(max_count=max_count):
+                commit_info = {
+                    "hash": commit.hexsha,
+                    "short_hash": commit.hexsha[:8],
+                    "message": commit.message.strip(),
+                    "author": commit.author.name,
+                    "author_email": commit.author.email,
+                    "date": commit.committed_datetime.isoformat(),
+                    "summary": commit.message.split('\n')[0].strip() if commit.message else "",
+                }
+                commits.append(commit_info)
+            
+            self.logger.info(f"Retrieved {len(commits)} commits from repository")
+            return commits
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get commit list: {e}")
+            return []
+    
+    def get_commit_diff(self, commit_hash: str) -> Dict[str, Any]:
+        """
+        Get diff information for a specific commit
+        
+        Args:
+            commit_hash: Full or short commit hash
+        
+        Returns:
+            Dictionary with diff information including changed files and diffs
+        """
+        if not self.repo_path:
+            raise RuntimeError("No repository loaded")
+        
+        try:
+            repo = Repo(self.repo_path)
+            commit = repo.commit(commit_hash)
+            
+            # Check if this is a shallow clone
+            is_shallow = repo.git.rev_parse('--is-shallow-repository', '--quiet', with_exceptions=False) == 0
+            
+            # If shallow clone and commit has parents, try to fetch more history
+            if is_shallow and commit.parents:
+                self.logger.info("Repository is shallow clone, attempting to fetch more history...")
+                try:
+                    # Try to unshallow to get parent commits
+                    repo.git.fetch('--unshallow')
+                    # Refresh commit object after fetch
+                    commit = repo.commit(commit_hash)
+                    self.logger.info("Successfully fetched more history")
+                except Exception as fetch_error:
+                    self.logger.warning(f"Failed to fetch more history: {fetch_error}")
+                    # Continue with shallow clone (will have limited diff info)
+            
+            # Get the diff with parent commit
+            if not commit.parents:
+                # This is the initial commit, show all files in the commit
+                parent = None
+                # Use create_patch=True to get full diff for statistics
+                diff_items = list(commit.diff(None, create_patch=True, R=True))
+            else:
+                parent = commit.parents[0]
+                # Use create_patch=True to get full diff for statistics
+                # IMPORTANT: Use commit.diff(parent) instead of parent.diff(commit)
+                # to get the diff from parent to commit (changes made in this commit)
+                try:
+                    diff_items = list(commit.diff(parent, create_patch=True, R=True))
+                except Exception as diff_error:
+                    self.logger.error(f"Failed to get diff between commits: {diff_error}")
+                    # If diff fails (e.g., parent not available in shallow clone), return empty diff
+                    diff_items = []
+            
+            changed_files = []
+            file_diffs = {}
+            
+            for diff_item in diff_items:
+                file_path = diff_item.b_path or diff_item.a_path
+                
+                change_type = "modified"
+                if diff_item.new_file:
+                    change_type = "added"
+                elif diff_item.deleted_file:
+                    change_type = "deleted"
+                elif diff_item.renamed_file:
+                    change_type = "renamed"
+                
+                # Try to get diff text if possible
+                diff_text = ""
+                try:
+                    if diff_item.diff:
+                        diff_text = diff_item.diff.decode('utf-8', errors='ignore')
+                except Exception:
+                    diff_text = ""
+                
+                # Count additions and deletions using diff text
+                # Parse diff more carefully to get accurate statistics
+                additions = 0
+                deletions = 0
+                
+                if diff_text:
+                    lines = diff_text.split('\n')
+                    for line in lines:
+                        # Skip diff headers
+                        if line.startswith('diff --git'):
+                            continue
+                        if line.startswith('index '):
+                            continue
+                        if line.startswith('--- '):
+                            continue
+                        if line.startswith('+++ '):
+                            continue
+                        if line.startswith('@@'):
+                            continue
+                        
+                        # Count additions (lines starting with +, not +++)
+                        if line.startswith('+') and not line.startswith('+++'):
+                            stripped = line[1:].strip()
+                            if stripped:  # Only count non-empty lines
+                                additions += 1
+                        
+                        # Count deletions (lines starting with -, not ---)
+                        elif line.startswith('-') and not line.startswith('---'):
+                            stripped = line[1:].strip()
+                            if stripped:  # Only count non-empty lines
+                                deletions += 1
+                
+                # Debug logging for first file
+                if not changed_files:  # Only log for first file
+                    self.logger.info(f"File: {file_path}, Change type: {change_type}")
+                    self.logger.info(f"Additions: {additions}, Deletions: {deletions}")
+                    if diff_text:
+                        self.logger.info(f"Full diff text:\n{diff_text}")
+                
+                file_info = {
+                    "path": file_path,
+                    "change_type": change_type,
+                    "additions": additions,
+                    "deletions": deletions,
+                }
+                
+                changed_files.append(file_info)
+                file_diffs[file_path] = {
+                    "diff": diff_text,
+                    "change_type": change_type,
+                }
+            
+            # If no changed files but this is not initial commit, it might be due to shallow clone
+            if not changed_files and commit.parents and is_shallow:
+                self.logger.warning("No diff information available (shallow clone limitation)")
+            
+            return {
+                "commit_hash": commit.hexsha,
+                "short_hash": commit.hexsha[:8],
+                "message": commit.message.strip(),
+                "author": commit.author.name,
+                "date": commit.committed_datetime.isoformat(),
+                "parent_hash": parent.hexsha if parent else None,
+                "changed_files": changed_files,
+                "file_diffs": file_diffs,
+                "is_shallow": is_shallow,
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Failed to get commit diff: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return {}
+    
+    def checkout_commit(self, commit_hash: str) -> bool:
+        """
+        Checkout a specific commit in the repository
+        
+        Args:
+            commit_hash: Full or short commit hash
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.repo_path:
+            raise RuntimeError("No repository loaded")
+        
+        try:
+            repo = Repo(self.repo_path)
+            repo.git.checkout(commit_hash)
+            self.logger.info(f"Checked out commit {commit_hash}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to checkout commit {commit_hash}: {e}")
+            return False
+    
+    def checkout_branch(self, branch_name: str) -> bool:
+        """
+        Checkout a specific branch in the repository
+        
+        Args:
+            branch_name: Name of the branch to checkout
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.repo_path:
+            raise RuntimeError("No repository loaded")
+        
+        try:
+            repo = Repo(self.repo_path)
+            repo.git.checkout(branch_name)
+            self.logger.info(f"Checked out branch {branch_name}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Failed to checkout branch {branch_name}: {e}")
+            return False
     
     def cleanup(self):
         """Clean up temporary directories"""

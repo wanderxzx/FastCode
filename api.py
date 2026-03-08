@@ -46,6 +46,7 @@ class QueryRequest(BaseModel):
     repo_filter: Optional[List[str]] = Field(None, description="Repository names to search")
     multi_turn: bool = Field(False, description="Enable multi-turn mode")
     session_id: Optional[str] = Field(None, description="Session ID for multi-turn dialogue")
+    commit_hash: Optional[str] = Field(None, description="Commit hash for commit-level analysis")
 
 
 class QueryResponse(BaseModel):
@@ -83,6 +84,14 @@ class StatusResponse(BaseModel):
     repo_info: Dict[str, Any]
     available_repositories: List[Dict[str, Any]] = Field(default_factory=list)
     loaded_repositories: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+
+
+
+class CheckoutRequest(BaseModel):
+    commit_hash: Optional[str] = Field(None, description="Commit hash to checkout")
+    branch_name: Optional[str] = Field(None, description="Branch name to checkout")
 
 
 # Initialize FastAPI app
@@ -511,6 +520,8 @@ async def query_repository_stream(request: QueryRequest):
         logger.info(f"Generated session for single-turn request: {session_id}")
 
     logger.info(f"Processing streaming query: {request.question}")
+    if request.commit_hash:
+        logger.info(f"Query context: commit {request.commit_hash}")
 
     async def event_generator():
         """Generate SSE events from query_stream"""
@@ -521,6 +532,7 @@ async def query_repository_stream(request: QueryRequest):
                 repo_filter=request.repo_filter,
                 session_id=session_id,
                 enable_multi_turn=request.multi_turn,
+                commit_hash=request.commit_hash,
             ):
                 if metadata:
                     status = metadata.get("status", "")
@@ -593,6 +605,88 @@ async def get_repository_summary():
         raise HTTPException(status_code=500, detail=str(e))
 
     return summary_payload
+
+
+@app.get("/commits")
+async def get_commits(max_count: int = 50):
+    """Get list of commits from the repository"""
+    fastcode = _ensure_fastcode_initialized()
+
+    if not fastcode.repo_loaded:
+        raise HTTPException(status_code=400, detail="No repository loaded")
+
+    try:
+        commits = fastcode.get_commits(max_count)
+        return {
+            "status": "success",
+            "commits": commits,
+            "count": len(commits),
+        }
+    except Exception as e:
+        logger.error(f"Failed to get commits: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/commit/{commit_hash}")
+async def get_commit_diff(commit_hash: str):
+    """Get diff information for a specific commit"""
+    fastcode = _ensure_fastcode_initialized()
+
+    if not fastcode.repo_loaded:
+        raise HTTPException(status_code=400, detail="No repository loaded")
+
+    try:
+        diff_info = fastcode.get_commit_diff(commit_hash)
+        if not diff_info:
+            raise HTTPException(status_code=404, detail=f"Commit {commit_hash} not found")
+        
+        return {
+            "status": "success",
+            "commit": diff_info,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get commit diff: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+
+
+@app.post("/commit/checkout")
+async def checkout_commit_or_branch(request: CheckoutRequest):
+    """Checkout a specific commit or branch and re-index the repository"""
+    fastcode = _ensure_fastcode_initialized()
+
+    if not fastcode.repo_loaded:
+        raise HTTPException(status_code=400, detail="No repository loaded")
+
+    if not request.commit_hash and not request.branch_name:
+        raise HTTPException(status_code=400, detail="Either commit_hash or branch_name must be provided")
+
+    try:
+        success = False
+        if request.commit_hash:
+            logger.info(f"Checking out commit: {request.commit_hash}")
+            success = fastcode.checkout_commit(request.commit_hash)
+        elif request.branch_name:
+            logger.info(f"Checking out branch: {request.branch_name}")
+            success = fastcode.checkout_branch(request.branch_name)
+        
+        if success:
+            return {
+                "status": "success",
+                "message": f"Successfully checked out {'commit ' + request.commit_hash if request.commit_hash else 'branch ' + request.branch_name}",
+                "repo_info": fastcode.repo_info,
+            }
+        else:
+            raise HTTPException(status_code=500, detail="Failed to checkout")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to checkout: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/new-session", response_model=NewSessionResponse)

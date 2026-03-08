@@ -244,12 +244,21 @@
                     </svg>
                     New Chat
                 </button>
+                <button onclick="reindexRepository()" class="flex-1 bg-blue-600 text-white px-3 py-2 rounded-lg hover:bg-blue-700 transition flex items-center justify-center gap-2 text-sm font-medium shadow-sm">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+                    </svg>
+                    Re-index
+                </button>
             </div>
         </div>
 
         <div class="flex border-b border-gray-200 bg-white">
             <button onclick="switchTab('repos')" id="tab-repos" class="flex-1 px-4 py-3 text-sm font-medium transition text-teal-600 border-b-2 border-teal-600">
                 Repositories
+            </button>
+            <button onclick="switchTab('commits')" id="tab-commits" class="flex-1 px-4 py-3 text-sm font-medium transition text-gray-500 hover:text-gray-700">
+                Commits
             </button>
             <button onclick="switchTab('chat')" id="tab-chat" class="flex-1 px-4 py-3 text-sm font-medium transition text-gray-500 hover:text-gray-700">
                 History
@@ -285,6 +294,11 @@
                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
                     </button>
                 </div>
+            </div>
+
+            <div id="commits-content" class="hidden space-y-2">
+                <div class="text-xs text-gray-500 px-1" id="commit-status-line">Loading commits...</div>
+                <div id="commits-list" class="space-y-2"></div>
             </div>
 
             <div id="chat-content" class="hidden space-y-2">
@@ -411,7 +425,10 @@
         isSending: false,
         isIndexing: false,
         chatMode: false, // false = single, true = multi
-        messages: []
+        messages: [],
+        selectedCommit: null,
+        commitMessageId: null,
+        currentTab: 'repos'
     };
 
     // --- MARKDOWN SETUP ---
@@ -652,7 +669,8 @@
                     question,
                     repo_filter: state.selectedRepos,
                     multi_turn: state.chatMode,
-                    session_id: state.sessionId
+                    session_id: state.sessionId,
+                    commit_hash: state.selectedCommit
                 })
             });
 
@@ -811,11 +829,17 @@
             `;
         }
         
+        // Generate unique message ID
+        const messageId = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        div.id = messageId;
+        
         container.appendChild(div);
         
         // Scroll to new message
         const scrollParent = document.getElementById('chat-area');
         scrollParent.scrollTo({ top: scrollParent.scrollHeight, behavior: 'smooth' });
+        
+        return messageId;
     }
 
     // --- UTILS ---
@@ -906,20 +930,169 @@
     function switchTab(tab) {
         document.getElementById('repos-content').classList.toggle('hidden', tab !== 'repos');
         document.getElementById('chat-content').classList.toggle('hidden', tab !== 'chat');
+        document.getElementById('commits-content').classList.toggle('hidden', tab !== 'commits');
 
         const btnRepos = document.getElementById('tab-repos');
+        const btnCommits = document.getElementById('tab-commits');
         const btnChat = document.getElementById('tab-chat');
 
         if (tab === 'repos') {
             btnRepos.className = "flex-1 px-4 py-3 text-sm font-medium transition text-teal-600 border-b-2 border-teal-600";
+            btnCommits.className = "flex-1 px-4 py-3 text-sm font-medium transition text-gray-500 hover:text-gray-700";
             btnChat.className = "flex-1 px-4 py-3 text-sm font-medium transition text-gray-500 hover:text-gray-700";
+        } else if (tab === 'commits') {
+            btnRepos.className = "flex-1 px-4 py-3 text-sm font-medium transition text-gray-500 hover:text-gray-700";
+            btnCommits.className = "flex-1 px-4 py-3 text-sm font-medium transition text-teal-600 border-b-2 border-teal-600";
+            btnChat.className = "flex-1 px-4 py-3 text-sm font-medium transition text-gray-500 hover:text-gray-700";
+            loadCommits();
         } else {
             btnRepos.className = "flex-1 px-4 py-3 text-sm font-medium transition text-gray-500 hover:text-gray-700";
+            btnCommits.className = "flex-1 px-4 py-3 text-sm font-medium transition text-gray-500 hover:text-gray-700";
             btnChat.className = "flex-1 px-4 py-3 text-sm font-medium transition text-teal-600 border-b-2 border-teal-600";
             loadSessions();
         }
     }
     
+    // Commits
+    async function loadCommits() {
+        try {
+            const statusLine = document.getElementById('commit-status-line');
+            statusLine.innerText = 'Loading commits...';
+            
+            const res = await fetch('/api/commits?max_count=50');
+            const data = await res.json();
+            
+            if (res.ok && data.commits) {
+                renderCommitList(data.commits);
+                statusLine.innerText = `${data.commits.length} commits`;
+            } else {
+                statusLine.innerText = 'Failed to load commits';
+                showToast('Failed to load commits', 'error');
+            }
+        } catch(e) {
+            document.getElementById('commit-status-line').innerText = 'Error loading commits';
+            showToast('Failed to load commits: ' + e.message, 'error');
+        }
+    }
+
+    function renderCommitList(commits) {
+        const container = document.getElementById('commits-list');
+        container.innerHTML = '';
+        
+        if (!commits || commits.length === 0) {
+            container.innerHTML = '<div class="text-center py-8 text-xs text-gray-400">No commits found</div>';
+            return;
+        }
+        
+        commits.forEach(commit => {
+            const div = document.createElement('div');
+            div.className = 'p-3 rounded-lg border border-gray-200 hover:border-teal-300 hover:bg-gray-50 transition cursor-pointer';
+            if (state.selectedCommit === commit.short_hash) {
+                div.className = 'p-3 rounded-lg border border-teal-500 bg-teal-50 cursor-pointer';
+            }
+            
+            div.innerHTML = `
+                <div class="flex items-start gap-2">
+                    <div class="flex-1 min-w-0">
+                        <div class="flex items-center gap-2 mb-1">
+                            <span class="text-xs font-mono text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">${commit.short_hash}</span>
+                            ${state.selectedCommit === commit.short_hash ? '<span class="text-xs text-teal-600">● Selected</span>' : ''}
+                        </div>
+                        <div class="text-sm text-gray-800 truncate">${escapeHtml(commit.message.split('\n')[0])}</div>
+                        <div class="text-xs text-gray-500 mt-1">${commit.author} · ${new Date(commit.date).toLocaleDateString()}</div>
+                    </div>
+                </div>
+            `;
+            
+            div.onclick = () => selectCommit(commit);
+            container.appendChild(div);
+        });
+    }
+
+    function selectCommit(commit) {
+        state.selectedCommit = commit.short_hash;
+        
+        // Update visual selection
+        const commits = document.querySelectorAll('#commits-list > div');
+        commits.forEach(div => {
+            if (div.textContent.includes(commit.short_hash)) {
+                div.className = 'p-3 rounded-lg border border-teal-500 bg-teal-50 cursor-pointer';
+            } else {
+                div.className = 'p-3 rounded-lg border border-gray-200 hover:border-teal-300 hover:bg-gray-50 transition cursor-pointer';
+            }
+        });
+        
+        // Show commit info
+        showCommitInfo(commit);
+        
+        // Ensure state is ready for chat
+        if (!state.ready) {
+            state.ready = true;
+            updateUIStatus();
+        }
+    }
+
+    async function showCommitInfo(commit) {
+        // Remove previous commit message if exists
+        if (state.commitMessageId) {
+            const oldMessage = document.getElementById(state.commitMessageId);
+            if (oldMessage) {
+                oldMessage.remove();
+            }
+            state.commitMessageId = null;
+        }
+        
+        try {
+            // Get commit diff to get file changes info
+            const diffRes = await fetch(`/api/commit/${commit.short_hash}`);
+            const diffData = await diffRes.json();
+            
+            // Build commit overview message (simplified, clean format)
+            let infoMessage = `**Commit:** \`${commit.short_hash}\`\n\n`;
+            infoMessage += `**Message:**\n${escapeHtml(commit.message)}\n\n`;
+            infoMessage += `**Author:** ${escapeHtml(commit.author)}\n`;
+            infoMessage += `**Date:** ${new Date(commit.date).toLocaleString()}\n\n`;
+            
+            // Add changed files overview
+            if (diffRes.ok && diffData.commit && diffData.commit.changed_files) {
+                const changedFiles = diffData.commit.changed_files;
+                if (changedFiles.length > 0) {
+                    infoMessage += `**Changed Files (${changedFiles.length}):**\n`;
+                    changedFiles.forEach(file => {
+                        const icon = file.change_type === 'added' ? '➕' : 
+                                    file.change_type === 'deleted' ? '➖' : 
+                                    file.change_type === 'renamed' ? '🔄' : '✏️';
+                        infoMessage += `- ${icon} \`${file.path}\` ` + 
+                                    `(+${file.additions}/-${file.deletions})\n`;
+                    });
+                    
+                    // Add summary statistics
+                    const totalAdditions = changedFiles.reduce((sum, f) => sum + (f.additions || 0), 0);
+                    const totalDeletions = changedFiles.reduce((sum, f) => sum + (f.deletions || 0), 0);
+                    infoMessage += `\n**Total:** +${totalAdditions} / -${totalDeletions} lines`;
+                }
+            }
+            
+            // Add assistant message with commit overview
+            state.commitMessageId = addMessage({
+                role: 'assistant',
+                content: infoMessage
+            });
+            
+            // Ensure state is ready for chat
+            if (!state.ready) {
+                state.ready = true;
+                updateUIStatus();
+            }
+        } catch(e) {
+            // Fallback to simple message if failed to get diff
+            state.commitMessageId = addMessage({
+                role: 'assistant',
+                content: `**Commit:** \`${commit.short_hash}\`\n\n**Message:**\n${escapeHtml(commit.message)}\n\n**Author:** ${escapeHtml(commit.author)}`
+            });
+        }
+    }
+
     // Session History
     async function loadSessions() {
         try {
@@ -1088,6 +1261,58 @@
                 showToast(data.detail || 'Delete failed', 'error');
             }
         } catch(e) { showToast('Delete failed: ' + e.message, 'error'); }
+    }
+    
+    async function reindexRepository() {
+        const btn = event.target.closest('button');
+        const originalText = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = `<span class="spinner"></span> Re-indexing...`;
+        
+        try {
+            const res = await fetch('/api/index?force=true', { method: 'POST' });
+            const data = await res.json();
+            
+            if (res.ok) {
+                let summaryText = '';
+                if (data.summary) {
+                    const summary = data.summary;
+                    if (summary.repository) summaryText += `**Repository:** ${summary.repository}\n`;
+                    if (summary.files !== undefined) summaryText += `**Files:** ${summary.files}\n`;
+                    if (summary.size) summaryText += `**Size:** ${summary.size}\n`;
+                    if (summary.indexed_elements !== undefined) summaryText += `**Indexed elements:** ${summary.indexed_elements}\n`;
+                }
+                
+                if (summaryText) {
+                    addMessage({
+                        role: 'assistant',
+                        content: `✅ Repository re-indexed successfully!\n\n${summaryText}`
+                    });
+                } else {
+                    addMessage({
+                        role: 'assistant',
+                        content: `✅ Repository re-indexed successfully!`
+                    });
+                }
+                
+                if (state.currentTab === 'commits') {
+                    await loadCommits();
+                }
+            } else {
+                addMessage({
+                    role: 'assistant',
+                    content: `❌ Failed to re-index: ${data.detail || 'Unknown error'}`
+                });
+            }
+        } catch (err) {
+            addMessage({
+                role: 'assistant',
+                content: `❌ Error re-indexing: ${err.message}`
+            });
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
     }
 </script>
 </body>

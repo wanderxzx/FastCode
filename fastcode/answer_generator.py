@@ -604,8 +604,60 @@ Symbol Mappings:
         #     intent = query_info["intent"]
         #     user_parts.append(f"\n*(Detected intent: {intent})*")
         
+        # Add commit context if available
+        if query_info and "commit_info" in query_info:
+            commit_info = query_info["commit_info"]
+            user_parts.append("\n**Commit Information**:\n")
+            user_parts.append(f"Commit: `{commit_info.get('short_hash', 'unknown')}`\n")
+            
+            # Add commit message/summary
+            message = commit_info.get('message', '') or commit_info.get('summary', '')
+            if message:
+                user_parts.append(f"Message: {message}\n\n")
+            
+            # Add changed files
+            if commit_info.get('changed_files'):
+                user_parts.append("**Changed Files**:\n")
+                for file in commit_info['changed_files']:
+                    user_parts.append(f"- `{file['path']}` ({file['change_type']}, +{file.get('additions', 0)}/-{file.get('deletions', 0)})\n")
+                user_parts.append("\n")
+            
+            # Add code changes (diff)
+            if commit_info.get('file_diffs'):
+                user_parts.append("**Code Changes**:\n")
+                file_count = 0
+                for file_path, file_info in commit_info['file_diffs'].items():
+                    if file_count >= 5:  # Limit to 5 files
+                        user_parts.append("...(more files omitted)\n")
+                        break
+                    
+                    diff_text = file_info.get('diff', '')
+                    if diff_text:
+                        # Filter and simplify diff
+                        diff_lines = diff_text.split('\n')
+                        key_lines = []
+                        for line in diff_lines[:30]:  # Take first 30 lines
+                            # Keep diff headers, additions, deletions, and file paths
+                            if line.startswith('@@'):
+                                key_lines.append(line)
+                            elif line.startswith('+') and not line.startswith('+++'):
+                                key_lines.append(line)
+                            elif line.startswith('-') and not line.startswith('---'):
+                                key_lines.append(line)
+                            elif line.startswith('diff --git a/'):
+                                key_lines.append(line)
+                        
+                        if key_lines:
+                            user_parts.append(f"\n**{file_path}**:\n")
+                            user_parts.append('\n'.join(key_lines[:20]))  # Limit to 20 lines
+                            if len(diff_lines) > 20:
+                                user_parts.append("\n...(truncated)")
+                            user_parts.append("\n")
+                        file_count += 1
+                user_parts.append("\n")
+        
         # Add context
-        user_parts.append("\n**Relevant Code Context**:\n")
+        user_parts.append("**Relevant Code Context**:\n")
         user_parts.append(context)
         
         # Add instruction
