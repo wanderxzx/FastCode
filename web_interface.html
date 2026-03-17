@@ -426,6 +426,7 @@
     const state = {
         selectedRepos: [],
         availableRepos: [],
+        loadedRepos: [],
         ready: false,
         sessionId: null,
         isSending: false,
@@ -496,6 +497,7 @@
             const data = await res.json();
             state.ready = data.repo_indexed;
             state.availableRepos = data.available_repositories || [];
+            state.loadedRepos = data.loaded_repositories || [];
             updateUIStatus();
             renderRepoList();
         } catch (e) { console.error(e); }
@@ -528,7 +530,7 @@
         const list = document.getElementById('repos-list');
         list.innerHTML = '';
         const filtered = state.availableRepos.filter(r => r.name.toLowerCase().includes(filter.toLowerCase()));
-        
+
         if (!filtered.length) {
             list.innerHTML = '<div class="text-center py-4 text-xs text-gray-400">No matching repositories</div>';
             return;
@@ -536,17 +538,21 @@
 
         filtered.forEach(repo => {
             const isSelected = state.selectedRepos.includes(repo.name);
+            const isLoaded = state.loadedRepos.some(lr => lr.name === repo.name);
             const el = document.createElement('div');
             el.className = `p-3 rounded-lg border cursor-pointer transition flex items-center justify-between group ${isSelected ? 'border-teal-500 bg-teal-50' : 'border-gray-200 hover:border-teal-300 bg-white'}`;
             el.onclick = () => toggleRepo(repo.name);
-            
+
             el.innerHTML = `
                 <div class="flex items-center gap-3 overflow-hidden">
-                    <div class="${isSelected ? 'text-teal-600' : 'text-gray-400 group-hover:text-teal-500'}">>
+                    <div class="${isSelected ? 'text-teal-600' : 'text-gray-400 group-hover:text-teal-500'}">
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg>
                     </div>
                     <div class="min-w-0">
-                        <div class="text-sm font-medium text-gray-900 truncate">${repo.name}</div>
+                        <div class="flex items-center gap-2">
+                            <div class="text-sm font-medium text-gray-900 truncate">${repo.name}</div>
+                            ${isLoaded ? '<span class="text-xs text-teal-600 bg-teal-100 px-1.5 py-0.5 rounded border border-teal-200">loaded</span>' : ''}
+                        </div>
                         <div class="text-xs text-gray-500">${repo.file_count} files • ${(repo.size_mb||0).toFixed(1)} MB</div>
                     </div>
                 </div>
@@ -984,32 +990,32 @@
     function renderCommitList(commits) {
         const container = document.getElementById('commits-list');
         container.innerHTML = '';
-        
+
         if (!commits || commits.length === 0) {
             container.innerHTML = '<div class="text-center py-8 text-xs text-gray-400">No commits found</div>';
             return;
         }
-        
+
         commits.forEach(commit => {
+            const isSelected = state.selectedCommit === commit.short_hash;
             const div = document.createElement('div');
-            div.className = 'p-3 rounded-lg border border-gray-200 hover:border-teal-300 hover:bg-gray-50 transition cursor-pointer';
-            if (state.selectedCommit === commit.short_hash) {
-                div.className = 'p-3 rounded-lg border border-teal-500 bg-teal-50 cursor-pointer';
-            }
-            
+            div.className = isSelected
+                ? 'p-3 rounded-lg border border-teal-500 bg-teal-50 cursor-pointer'
+                : 'p-3 rounded-lg border border-gray-200 hover:border-teal-300 hover:bg-gray-50 transition cursor-pointer';
+
             div.innerHTML = `
                 <div class="flex items-start gap-2">
                     <div class="flex-1 min-w-0">
                         <div class="flex items-center gap-2 mb-1">
                             <span class="text-xs font-mono text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded">${commit.short_hash}</span>
-                            ${state.selectedCommit === commit.short_hash ? '<span class="text-xs text-teal-600">● Selected</span>' : ''}
+                            ${isSelected ? '<span class="text-xs text-teal-600">● Selected</span>' : ''}
                         </div>
                         <div class="text-sm text-gray-800 truncate">${escapeHtml(commit.message.split('\n')[0])}</div>
                         <div class="text-xs text-gray-500 mt-1">${commit.author} · ${new Date(commit.date).toLocaleDateString()}</div>
                     </div>
                 </div>
             `;
-            
+
             div.onclick = () => selectCommit(commit);
             container.appendChild(div);
         });
@@ -1017,20 +1023,40 @@
 
     function selectCommit(commit) {
         state.selectedCommit = commit.short_hash;
-        
-        // Update visual selection
-        const commits = document.querySelectorAll('#commits-list > div');
-        commits.forEach(div => {
-            if (div.textContent.includes(commit.short_hash)) {
-                div.className = 'p-3 rounded-lg border border-teal-500 bg-teal-50 cursor-pointer';
-            } else {
-                div.className = 'p-3 rounded-lg border border-gray-200 hover:border-teal-300 hover:bg-gray-50 transition cursor-pointer';
+
+        // Update visual selection by finding and updating all commit elements
+        const commitElements = document.querySelectorAll('#commits-list > div');
+        commitElements.forEach(div => {
+            const hashSpan = div.querySelector('span.font-mono');
+            if (hashSpan) {
+                const hash = hashSpan.textContent.trim();
+                const isSelected = hash === commit.short_hash;
+
+                // Update class
+                if (isSelected) {
+                    div.className = 'p-3 rounded-lg border border-teal-500 bg-teal-50 cursor-pointer';
+                } else {
+                    div.className = 'p-3 rounded-lg border border-gray-200 hover:border-teal-300 hover:bg-gray-50 transition cursor-pointer';
+                }
+
+                // Update "Selected" label
+                const selectedLabel = div.querySelector('span.text-teal-600');
+                if (isSelected && !selectedLabel) {
+                    // Add "Selected" label
+                    const label = document.createElement('span');
+                    label.className = 'text-xs text-teal-600';
+                    label.textContent = '● Selected';
+                    hashSpan.parentElement.appendChild(label);
+                } else if (!isSelected && selectedLabel) {
+                    // Remove "Selected" label
+                    selectedLabel.remove();
+                }
             }
         });
-        
+
         // Show commit info
         showCommitInfo(commit);
-        
+
         // Ensure state is ready for chat
         if (!state.ready) {
             state.ready = true;
