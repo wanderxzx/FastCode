@@ -134,7 +134,7 @@ class FastCode:
         # SCP-like git syntax, e.g. git@github.com:user/repo.git
         return bool(re.match(r"^[^@\s]+@[^:\s]+:[^\s]+$", normalized))
     
-    def load_repository(self, source: str, is_url: Optional[bool] = None, is_zip: bool = False):
+    def load_repository(self, source: str, is_url: Optional[bool] = None, is_zip: bool = False, copy_to_workspace: bool = False):
         """
         Load repository from URL, local path, or ZIP file
         
@@ -143,6 +143,7 @@ class FastCode:
             is_url: True if source is a URL, False if local path.
                     If None, FastCode auto-detects source type.
             is_zip: True if source is a ZIP file, False otherwise
+            copy_to_workspace: If True, copy local repos to workspace; if False, use path directly
         """
         self.logger.info(f"Loading repository: {source}")
         
@@ -158,7 +159,7 @@ class FastCode:
             elif resolved_is_url:
                 self.loader.load_from_url(source)
             else:
-                self.loader.load_from_path(source)
+                self.loader.load_from_path(source, copy_to_workspace=copy_to_workspace)
             
             self.repo_loaded = True
             self.repo_info = self.loader.get_repository_info()

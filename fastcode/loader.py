@@ -118,16 +118,17 @@ class RepositoryLoader:
             self.logger.error(f"Failed to clone repository: {e}")
             raise RuntimeError(f"Failed to clone repository: {e}")
     
-    def load_from_path(self, path: str, target_dir: Optional[str] = None) -> str:
+    def load_from_path(self, path: str, target_dir: Optional[str] = None, copy_to_workspace: bool = False) -> str:
         """
         Copy local repository into repository workspace and load it.
         
         Args:
             path: Local path to repository
             target_dir: Optional destination root (defaults to configured repo_root)
+            copy_to_workspace: If True, copy to workspace; if False, use path directly
         
         Returns:
-            Path to copied repository
+            Path to loaded repository (either copied or original)
         """
         if not os.path.exists(path):
             raise ValueError(f"Path does not exist: {path}")
@@ -137,6 +138,14 @@ class RepositoryLoader:
         
         source_path = os.path.abspath(path)
         self.repo_name = os.path.basename(source_path)
+
+        # Direct use mode: don't copy, use original path
+        if not copy_to_workspace:
+            self.repo_path = source_path
+            self.logger.info(f"Using repository in-place (no copy): {self.repo_path}")
+            return self.repo_path
+
+        # Copy mode: copy to workspace
         destination_root = os.path.abspath(target_dir) if target_dir else self.safe_repo_root
         destination_path = os.path.join(destination_root, self.repo_name)
 

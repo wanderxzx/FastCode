@@ -38,6 +38,10 @@ class LoadRepositoryRequest(BaseModel):
         None,
         description="True if source is URL, False if local path. If omitted, auto-detect."
     )
+    copy_to_workspace: bool = Field(
+        False,
+        description="If True, copy local repos to workspace; if False, use path directly"
+    )
 
 
 class QueryRequest(BaseModel):
@@ -234,7 +238,7 @@ async def load_repository(request: LoadRepositoryRequest):
 
     try:
         logger.info(f"Loading repository: {request.source}")
-        fastcode.load_repository(request.source, request.is_url)
+        fastcode.load_repository(request.source, request.is_url, copy_to_workspace=request.copy_to_workspace)
 
         return {
             "status": "success",
