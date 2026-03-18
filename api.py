@@ -612,19 +612,26 @@ async def get_repository_summary():
 
 
 @app.get("/commits")
-async def get_commits(max_count: int = 50):
-    """Get list of commits from the repository"""
+async def get_commits(max_count: int = 50, repo_name: Optional[str] = None):
+    """Get list of commits from the repository or a specific repository"""
     fastcode = _ensure_fastcode_initialized()
 
     if not fastcode.repo_loaded:
         raise HTTPException(status_code=400, detail="No repository loaded")
 
     try:
-        commits = fastcode.get_commits(max_count)
+        if repo_name:
+            # Get commits for specific repository
+            commits = fastcode.get_commits_for_repo(repo_name, max_count)
+        else:
+            # Get commits from current loaded repository
+            commits = fastcode.get_commits(max_count)
+
         return {
             "status": "success",
             "commits": commits,
             "count": len(commits),
+            "repo_name": repo_name,
         }
     except Exception as e:
         logger.error(f"Failed to get commits: {e}")
@@ -632,15 +639,15 @@ async def get_commits(max_count: int = 50):
 
 
 @app.get("/commit/{commit_hash}")
-async def get_commit_diff(commit_hash: str):
+async def get_commit_diff(commit_hash: str, repo_name: Optional[str] = None):
     """Get diff information for a specific commit"""
     fastcode = _ensure_fastcode_initialized()
 
-    if not fastcode.repo_loaded:
+    if not fastcode.repo_loaded and not repo_name:
         raise HTTPException(status_code=400, detail="No repository loaded")
 
     try:
-        diff_info = fastcode.get_commit_diff(commit_hash)
+        diff_info = fastcode.get_commit_diff(commit_hash, repo_name=repo_name)
         if not diff_info:
             raise HTTPException(status_code=404, detail=f"Commit {commit_hash} not found")
         

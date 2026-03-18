@@ -416,21 +416,24 @@ class RepositoryLoader:
             self.logger.error(f"Failed to get commit list: {e}")
             return []
     
-    def get_commit_diff(self, commit_hash: str) -> Dict[str, Any]:
+    def get_commit_diff(self, commit_hash: str, repo_path: Optional[str] = None) -> Dict[str, Any]:
         """
         Get diff information for a specific commit
         
         Args:
             commit_hash: Full or short commit hash
+            repo_path: Optional repository path (if not provided, uses self.repo_path)
         
         Returns:
             Dictionary with diff information including changed files and diffs
         """
-        if not self.repo_path:
+        path = repo_path or self.repo_path
+        
+        if not path:
             raise RuntimeError("No repository loaded")
         
         try:
-            repo = Repo(self.repo_path)
+            repo = Repo(path)
             commit = repo.commit(commit_hash)
             
             # Check if this is a shallow clone

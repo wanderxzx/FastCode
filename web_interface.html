@@ -297,7 +297,14 @@
             </div>
 
             <div id="commits-content" class="hidden space-y-2">
-                <div class="text-xs text-gray-500 px-1" id="commit-status-line">Loading commits...</div>
+                <div class="flex items-center justify-between px-1">
+                    <div class="flex items-center gap-2">
+                        <select id="commit-repo-selector" class="text-sm border border-gray-300 rounded-lg px-3 py-1.5 focus:ring-2 focus:ring-teal-500 focus:border-teal-500 outline-none" onchange="onCommitRepoChange()">
+                            <option value="">Select repository...</option>
+                        </select>
+                        <span class="text-xs text-gray-500" id="commit-status-line">Loading commits...</span>
+                    </div>
+                </div>
                 <div id="commits-list" class="space-y-2"></div>
             </div>
 
@@ -435,7 +442,8 @@
         messages: [],
         selectedCommit: null,
         commitMessageId: null,
-        currentTab: 'repos'
+        currentTab: 'repos',
+        selectedCommitRepo: null // Selected repository for viewing commits
     };
 
     // --- MARKDOWN SETUP ---
@@ -969,22 +977,60 @@
     async function loadCommits() {
         try {
             const statusLine = document.getElementById('commit-status-line');
-            statusLine.innerText = 'Loading commits...';
-            
-            const res = await fetch('/api/commits?max_count=50');
-            const data = await res.json();
-            
-            if (res.ok && data.commits) {
-                renderCommitList(data.commits);
-                statusLine.innerText = `${data.commits.length} commits`;
+            const selector = document.getElementById('commit-repo-selector');
+
+            // Populate repository selector
+            selector.innerHTML = '<option value="">Select repository...</option>';
+            state.loadedRepos.forEach(repo => {
+                const option = document.createElement('option');
+                option.value = repo.name;
+                option.textContent = repo.name;
+                selector.appendChild(option);
+            });
+
+            // If no repo selected and there are loaded repos, select the first one
+            if (!state.selectedCommitRepo && state.loadedRepos.length > 0) {
+                state.selectedCommitRepo = state.loadedRepos[0].name;
+            }
+
+            // Set selected value
+            if (state.selectedCommitRepo) {
+                selector.value = state.selectedCommitRepo;
+            }
+
+            // Clear previous commit selection when switching repos
+            state.selectedCommit = null;
+
+            // Load commits for selected repository
+            if (state.selectedCommitRepo) {
+                statusLine.innerText = `Loading commits for ${state.selectedCommitRepo}...`;
+                const res = await fetch(`/api/commits?max_count=50&repo_name=${encodeURIComponent(state.selectedCommitRepo)}`);
+                const data = await res.json();
+
+                if (res.ok && data.commits) {
+                    renderCommitList(data.commits);
+                    statusLine.innerText = `${data.commits.length} commits`;
+                } else {
+                    statusLine.innerText = 'Failed to load commits';
+                    showToast('Failed to load commits', 'error');
+                }
             } else {
-                statusLine.innerText = 'Failed to load commits';
-                showToast('Failed to load commits', 'error');
+                renderCommitList([]);
+                statusLine.innerText = 'Select a repository to view commits';
             }
         } catch(e) {
             document.getElementById('commit-status-line').innerText = 'Error loading commits';
             showToast('Failed to load commits: ' + e.message, 'error');
         }
+    }
+
+    function onCommitRepoChange() {
+        const selector = document.getElementById('commit-repo-selector');
+        state.selectedCommitRepo = selector.value || null;
+        state.selectedCommit = null; // Clear commit selection when switching repos
+
+        // Reload commits for new repository
+        loadCommits();
     }
 
     function renderCommitList(commits) {
@@ -1076,7 +1122,9 @@
         
         try {
             // Get commit diff to get file changes info
-            const diffRes = await fetch(`/api/commit/${commit.short_hash}`);
+            // Include repo_name parameter if a repository is selected
+            const repoParam = state.selectedCommitRepo ? `?repo_name=${encodeURIComponent(state.selectedCommitRepo)}` : '';
+            const diffRes = await fetch(`/api/commit/${commit.short_hash}${repoParam}`);
             const diffData = await diffRes.json();
             
             // Build commit overview message (simplified, clean format)

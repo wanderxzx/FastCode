@@ -713,32 +713,112 @@ class FastCode:
     def get_commits(self, max_count: int = 50) -> List[Dict[str, Any]]:
         """
         Get list of commits from the loaded repository
-        
+
         Args:
             max_count: Maximum number of commits to retrieve
-        
+
         Returns:
             List of commit dictionaries
         """
         if not self.repo_loaded:
             raise RuntimeError("No repository loaded. Call load_repository() first.")
-        
+
         return self.loader.get_commit_list(max_count)
+
+    def get_commits_for_repo(self, repo_name: str, max_count: int = 50) -> List[Dict[str, Any]]:
+        """
+        Get list of commits from a specific repository
+
+        Args:
+            repo_name: Name of the repository to get commits from
+            max_count: Maximum number of commits to retrieve
+
+        Returns:
+            List of commit dictionaries
+        """
+        self.logger.info(f"Getting commits for repository: {repo_name}")
+        self.logger.info(f"Loaded repositories: {list(self.loaded_repositories.keys())}")
+
+        if repo_name not in self.loaded_repositories:
+            self.logger.error(f"Repository '{repo_name}' not found in loaded repositories")
+            raise ValueError(f"Repository '{repo_name}' not found in loaded repositories")
+
+        repo_info = self.loaded_repositories[repo_name]
+        self.logger.info(f"Repository info for '{repo_name}': {repo_info}")
+
+        repo_path = repo_info.get('path')
+
+        if not repo_path:
+            self.logger.error(f"Repository path is missing for '{repo_name}'")
+            raise ValueError(f"Repository path not found for '{repo_name}'")
+
+        if not os.path.exists(repo_path):
+            self.logger.error(f"Repository path does not exist: {repo_path}")
+            raise ValueError(f"Repository path does not exist: {repo_path}")
+
+        self.logger.info(f"Repository path: {repo_path}")
+
+        # Use gitpython directly to get commits
+        try:
+            from git import Repo as GitRepo
+            self.logger.info(f"Opening git repository at: {repo_path}")
+            repo = GitRepo(repo_path)
+            commits = []
+
+            self.logger.info(f"Iterating commits (max_count={max_count})")
+            for commit in repo.iter_commits(max_count=max_count):
+                commit_info = {
+                    "hash": commit.hexsha,
+                    "short_hash": commit.hexsha[:8],
+                    "message": commit.message.strip(),
+                    "author": commit.author.name,
+                    "author_email": commit.author.email,
+                    "date": commit.committed_datetime.isoformat(),
+                    "summary": commit.message.split('\n')[0].strip() if commit.message else "",
+                }
+                commits.append(commit_info)
+
+            self.logger.info(f"Successfully retrieved {len(commits)} commits from repository '{repo_name}'")
+            return commits
+
+        except Exception as e:
+            self.logger.error(f"Failed to get commits from repository '{repo_name}': {e}")
+            import traceback
+            self.logger.error(f"Traceback: {traceback.format_exc()}")
+            raise RuntimeError(f"Failed to get commits from repository '{repo_name}': {e}")
     
-    def get_commit_diff(self, commit_hash: str) -> Dict[str, Any]:
+    def get_commit_diff(self, commit_hash: str, repo_name: Optional[str] = None) -> Dict[str, Any]:
         """
         Get diff information for a specific commit
         
         Args:
             commit_hash: Full or short commit hash
+            repo_name: Optional repository name to get diff from
         
         Returns:
             Dictionary with diff information
         """
-        if not self.repo_loaded:
+        if not self.repo_loaded and not repo_name:
             raise RuntimeError("No repository loaded. Call load_repository() first.")
         
-        return self.loader.get_commit_diff(commit_hash)
+        # If repo_name is provided, get diff from that specific repository
+        if repo_name:
+            if repo_name not in self.loaded_repositories:
+                raise ValueError(f"Repository '{repo_name}' not found in loaded repositories")
+            
+            repo_info = self.loaded_repositories[repo_name]
+            repo_path = repo_info.get("path")
+            
+            if not repo_path:
+                raise ValueError(f"Repository path not found for '{repo_name}'")
+            
+            # Use a temporary loader to get the diff
+            from .loader import RepositoryLoader as RepoLoader
+            temp_loader = RepoLoader(self.config)
+            return temp_loader.get_commit_diff(commit_hash, repo_path=repo_path)
+        else:
+            # Use the current loader
+            return self.loader.get_commit_diff(commit_hash)
     
     def checkout_commit(self, commit_hash: str) -> bool:
         """
@@ -1490,15 +1570,88 @@ class FastCode:
                 self.logger.error("Failed to load any repository indexes")
                 return False
             
-            # Register loaded repositories
+            # Register loaded repositories with their paths
             # We know which repos were successfully loaded from repos_to_load
             for repo_name in repos_to_load:
                 if repo_name not in self.loaded_repositories:
+                    # Try to load repo_info from cache to get the path
+                    repo_info_path = os.path.join(persist_dir, f"{repo_name}_repo_info.pkl")
+                    repo_path = None
+
+                    if os.path.exists(repo_info_path):
+                        try:
+                            with open(repo_info_path, 'rb') as f:
+                                cached_info = pickle.load(f)
+                                repo_path = cached_info.get("path")
+                                self.logger.info(f"Loaded repo_info from cache for {repo_name}: path={repo_path}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to load repo_info for {repo_name}: {e}")
+                    else:
+                        self.logger.warning(f"repo_info.pkl not found for {repo_name}")
+
+                    # If no path in cache, try to find it
+                    if not repo_path:
+                        self.logger.info(f"Searching for repository path for {repo_name}...")
+
+                        # Strategy 1: Try repos directory
+                        repos_dir = self.config.get("repo_root", "./repos")
+                        repo_in_repos = os.path.join(repos_dir, repo_name)
+                        if os.path.exists(repo_in_repos) and os.path.exists(os.path.join(repo_in_repos, ".git")):
+                            repo_path = os.path.abspath(repo_in_repos)
+                            self.logger.info(f"Found repo in repos directory: {repo_path}")
+                        else:
+                            # Strategy 2: Try to extract from vector_store metadata
+                            if self.vector_store.metadata and len(self.vector_store.metadata) > 0:
+                                for meta in self.vector_store.metadata:
+                                    if meta.get("repository") == repo_name or meta.get("repo_name") == repo_name:
+                                        file_path = meta.get("file_path") or meta.get("relative_path")
+                                        if file_path:
+                                            # Extract repo path from file path
+                                            # Handle both absolute and relative paths
+                                            if os.path.isabs(file_path):
+                                                # For absolute path, extract parent directory
+                                                repo_path = os.path.dirname(file_path)
+                                                # Keep going up until we find .git directory
+                                                while repo_path and repo_path != os.path.dirname(repo_path):
+                                                    if os.path.exists(os.path.join(repo_path, ".git")):
+                                                        break
+                                                    repo_path = os.path.dirname(repo_path)
+                                                if repo_path and os.path.exists(os.path.join(repo_path, ".git")):
+                                                    repo_path = os.path.abspath(repo_path)
+                                                    self.logger.info(f"Found repo from metadata: {repo_path}")
+                                                    break
+                                            else:
+                                                # For relative path, try to find repo_root from config
+                                                repo_root = self.config.get("repo_root", ".")
+                                                if os.path.exists(os.path.join(repo_root, ".git")):
+                                                    repo_path = os.path.abspath(repo_root)
+                                                    self.logger.info(f"Found repo_root: {repo_path}")
+                                                    break
+
+                    # Register the repository
                     self.loaded_repositories[repo_name] = {
                         "name": repo_name,
+                        "path": repo_path,  # Include path for commit operations
                         "file_count": 0,  # Will be updated if needed
                         "total_size_mb": 0,
                     }
+
+                    if not repo_path:
+                        self.logger.warning(f"Could not find path for repository {repo_name}")
+                    else:
+                        # Save the repo_info.pkl file for future use
+                        self.logger.info(f"Saving repo_info.pkl for {repo_name}: {repo_path}")
+                        try:
+                            with open(repo_info_path, 'wb') as f:
+                                pickle.dump({
+                                    "name": repo_name,
+                                    "path": repo_path,
+                                    "file_count": len(self.vector_store.metadata) if self.vector_store.metadata else 0,
+                                    "total_size_mb": 0,
+                                }, f)
+                            self.logger.info(f"Successfully saved repo_info.pkl for {repo_name}")
+                        except Exception as e:
+                            self.logger.warning(f"Failed to save repo_info.pkl for {repo_name}: {e}")
             
             # Try to load BM25 and graph data from saved files
             # For multi-repo, we merge BM25 data from all loaded repositories
