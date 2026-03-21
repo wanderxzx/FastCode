@@ -41,7 +41,7 @@ def setup_logging(config: Dict[str, Any]) -> logging.Logger:
 
 def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
     """Load configuration from YAML file"""
-    with open(config_path, 'r') as f:
+    with open(config_path, 'r', encoding='utf-8') as f:
         config = yaml.safe_load(f)
 
     # Resolve relative paths against FastCode project root inferred from config path.

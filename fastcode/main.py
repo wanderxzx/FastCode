@@ -7,7 +7,7 @@ import pickle
 import logging
 import re
 from urllib.parse import urlparse
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List, Callable, Set
 import numpy as np
 from rank_bm25 import BM25Okapi
 
@@ -594,9 +594,13 @@ class FastCode:
             )
 
             # Enhance with call graph context for commit analysis
+            call_graph_stats = None
             if commit_info and commit_info.get('file_diffs'):
                 self.logger.info("Enhancing retrieval with call graph context for commit analysis")
-                retrieved = self._enhance_with_call_graph_context(retrieved, commit_info)
+                retrieved, call_graph_stats = self._enhance_with_call_graph_context(retrieved, commit_info)
+                if call_graph_stats:
+                    # Add stats to commit_info so LLM can reference them
+                    commit_info['call_graph_analysis'] = call_graph_stats
 
             # Notify start of generation
             yield None, {"status": "generating", "retrieved_count": len(retrieved)}
@@ -862,55 +866,72 @@ class FastCode:
         
         return success
     
-    def _enhance_with_call_graph_context(self, retrieved: List[Dict[str, Any]], 
-                                         commit_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _enhance_with_call_graph_context(self, retrieved: List[Dict[str, Any]],
+                                     commit_info: Dict[str, Any]) -> tuple:
         """
         Enhance retrieved elements with call graph context for commit analysis
-        
+
         For each modified function in the commit, find its callers and callees
         to provide a more complete view of the changes' impact.
-        
+
         Note: This assumes the repository has been re-indexed after the commit
         was made, so all modified functions exist in the graph.
-        
+
         Args:
             retrieved: List of already retrieved elements
             commit_info: Commit information with file diffs
-        
+
         Returns:
-            Enhanced list of retrieved elements with call graph context
+            Tuple of (enhanced_retrieved, call_graph_stats)
         """
         if not commit_info.get('file_diffs'):
-            return retrieved
-        
+            return retrieved, None
+
         import re
-        
+
         # Track elements to avoid duplicates
         element_ids = {elem.get('element', {}).get('id') for elem in retrieved}
         added_elements_count = 0
-        
+
+        self.logger.info(f"Total metadata elements in vector_store: {len(self.vector_store.metadata) if self.vector_store.metadata else 0}")
+
+        # Track call graph statistics for reporting
+        call_graph_stats = {
+            'total_modified_functions': 0,
+            'total_callers': 0,
+            'total_callees': 0,
+            'file_details': {}
+        }
+
         # For each modified file, find related functions through call graph
         for file_path, file_info in commit_info['file_diffs'].items():
             diff_text = file_info.get('diff', '')
             if not diff_text:
                 continue
+
+            # Parse diff to find modified line ranges
+            modified_lines = self._parse_modified_lines_from_diff(diff_text)
             
-            # Extract function names from diff (simple heuristic)
-            # Look for function definitions that were added or modified
-            modified_functions = set()
-            for line in diff_text.split('\n'):
-                # Match Python function definitions
-                if line.startswith('+') and 'def ' in line:
-                    # Extract function name
-                    match = re.search(r'def\s+(\w+)\s*\(', line)
-                    if match:
-                        modified_functions.add(match.group(1))
-                # Match class definitions
-                elif line.startswith('+') and 'class ' in line:
-                    match = re.search(r'class\s+(\w+)', line)
-                    if match:
-                        modified_functions.add(match.group(1))
+            if not modified_lines:
+                self.logger.debug(f"No modified lines found in {file_path}")
+                continue
             
+            self.logger.info(f"File {file_path} has {len(modified_lines)} modified lines: {sorted(list(modified_lines))[:10]}{'...' if len(modified_lines) > 10 else ''}")
+            
+            # Find all functions in this file that are affected by the modifications
+            modified_functions = self._find_affected_functions(file_path, modified_lines)
+
+            if not modified_functions:
+                self.logger.debug(f"No affected functions found in {file_path}")
+                continue
+
+            self.logger.info(f"Found {len(modified_functions)} affected functions in {file_path}")
+            call_graph_stats['total_modified_functions'] += len(modified_functions)
+            call_graph_stats['file_details'][file_path] = {
+                'modified_count': len(modified_functions),
+                'modified_functions': list(modified_functions)
+            }
+
             # Process each modified function
             for func_name in modified_functions:
                 # Find the element in the graph builder
@@ -919,17 +940,19 @@ class FastCode:
                     self.logger.debug(f"Function {func_name} not found in graph. "
                                     "Make sure to re-index the repository after committing changes.")
                     continue
-                
+
                 elem_id = element.id
                 if elem_id in element_ids:
                     continue  # Already in retrieved
-                
+
                 # Get callers (functions that call this function)
                 callers = self.graph_builder.get_callers(elem_id)
-                for caller_id in callers[:3]:  # Limit to 3 callers
+                self.logger.info(f"Function {func_name} has {len(callers)} callers")
+
+                for caller_id in callers:
                     if caller_id in element_ids:
                         continue
-                    
+
                     caller_elem = self.graph_builder.element_by_id.get(caller_id)
                     if caller_elem:
                         element_ids.add(caller_id)
@@ -937,16 +960,20 @@ class FastCode:
                             'element': caller_elem.to_dict(),
                             'total_score': 0.5,
                             'retrieval_method': 'call_graph_caller',
-                            'related_commit_file': file_path
+                            'related_commit_file': file_path,
+                            'related_function': func_name
                         })
                         added_elements_count += 1
-                
+                        call_graph_stats['total_callers'] += 1
+
                 # Get callees (functions called by this function)
                 callees = self.graph_builder.get_callees(elem_id)
-                for callee_id in callees[:3]:  # Limit to 3 callees
+                self.logger.info(f"Function {func_name} has {len(callees)} callees")
+
+                for callee_id in callees:
                     if callee_id in element_ids:
                         continue
-                    
+
                     callee_elem = self.graph_builder.element_by_id.get(callee_id)
                     if callee_elem:
                         element_ids.add(callee_id)
@@ -954,15 +981,130 @@ class FastCode:
                             'element': callee_elem.to_dict(),
                             'total_score': 0.5,
                             'retrieval_method': 'call_graph_callee',
-                            'related_commit_file': file_path
+                            'related_commit_file': file_path,
+                            'related_function': func_name
                         })
                         added_elements_count += 1
-        
+                        call_graph_stats['total_callees'] += 1
+
         if added_elements_count > 0:
             self.logger.info(f"Enhanced retrieval with {added_elements_count} call graph elements")
+            self.logger.info(f"Call graph stats: {call_graph_stats}")
+
+        return retrieved, call_graph_stats
+
+    def _parse_modified_lines_from_diff(self, diff_text: str) -> Set[int]:
+        """
+        Parse diff text to extract all modified line numbers.
+
+        Args:
+            diff_text: The diff text to parse
+
+        Returns:
+            Set of modified line numbers
+        """
+        import re
+
+        modified_lines = set()
+
+        for line in diff_text.split('\n'):
+            # Match diff hunk headers like: @@ -10,7 +10,8 @@
+            # This indicates lines 10-17 were modified (with context)
+            match = re.match(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', line)
+            if match:
+                start_line = int(match.group(1))
+                line_count = int(match.group(2)) if match.group(2) else 1
+
+                # Add all lines in the modified range
+                for i in range(line_count):
+                    modified_lines.add(start_line + i)
+
+        return modified_lines
+
+    def _find_affected_functions(self, file_path: str, modified_lines: Set[int]) -> Set[str]:
+        """
+        Find all functions that are affected by the modified lines.
+
+        A function is affected if:
+        1. Its definition line is in the modified lines (function signature changed)
+        2. Any line of its body is in the modified lines (function content changed)
+
+        Args:
+            file_path: Path to the file
+            modified_lines: Set of modified line numbers
+
+        Returns:
+            Set of affected function names
+        """
+        if not self.vector_store.metadata:
+            self.logger.warning("No metadata in vector_store")
+            return set()
+
+        affected_functions = set()
+        file_function_count = 0
+        file_method_count = 0
+        file_class_count = 0
+
+        self.logger.info(f"Searching for elements in file: {file_path}")
+        self.logger.info(f"Checking {len(self.vector_store.metadata) if self.vector_store.metadata else 0} total elements")
+
+        # Normalize file path for matching
+        # The diff might show 'nanobot/channels/feishu.py'
+        # But the index might have 'D:/Projects/nanobot/nanobot/channels/feishu.py'
+        # Use endswith to match the relative path at the end of the full path
+        file_path_normalized = file_path.replace('\\', '/').lstrip('/')
         
-        return retrieved
-    
+        # We'll match against the end of the path
+        matching_elements = []
+        all_file_paths = set()
+        
+        for elem_meta in self.vector_store.metadata:
+            elem_path = elem_meta.get('file_path', '').replace('\\', '/')
+            
+            # Check if this element belongs to our file
+            # Match against the end of the path (filename and directory structure)
+            if elem_path.endswith(file_path_normalized):
+                matching_elements.append(elem_meta)
+                all_file_paths.add(elem_path)
+        
+        if all_file_paths:
+            self.logger.info(f"Found {len(matching_elements)} elements in {file_path} (matching paths: {list(all_file_paths)[:3]})")
+        else:
+            self.logger.warning(f"No elements found for {file_path}")
+            return set()
+
+        # Find all function elements in this file
+        for elem_meta in matching_elements:
+
+            elem_type = elem_meta.get('type')
+            if elem_type == 'function':
+                file_function_count += 1
+            elif elem_type == 'method':
+                file_method_count += 1
+            elif elem_type == 'class':
+                file_class_count += 1
+
+            if elem_type not in ('function', 'method'):
+                continue
+
+            func_name = elem_meta.get('name')
+            if not func_name:
+                continue
+
+            start_line = elem_meta.get('start_line', 0)
+            end_line = elem_meta.get('end_line', 0)
+
+            self.logger.debug(f"Found {elem_type} {func_name} (lines {start_line}-{end_line})")
+
+            # Check if any line of the function is modified
+            func_lines = set(range(start_line, end_line + 1))
+            if func_lines & modified_lines:  # Intersection not empty
+                affected_functions.add(func_name)
+                self.logger.debug(f"{elem_type} {func_name} (lines {start_line}-{end_line}) is affected by modifications")
+
+        total_functions = file_function_count + file_method_count
+        self.logger.info(f"Found {file_function_count} functions, {file_method_count} methods, {file_class_count} classes in {file_path}, {len(affected_functions)} of {total_functions} are affected")
+        return affected_functions    
     
     
     def _try_load_from_cache(self) -> bool:

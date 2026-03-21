@@ -655,20 +655,73 @@ Symbol Mappings:
                             user_parts.append("\n")
                         file_count += 1
                 user_parts.append("\n")
+            
+            # Add call graph analysis if available
+            if commit_info.get('call_graph_analysis'):
+                call_graph = commit_info['call_graph_analysis']
+                user_parts.append("**影响范围分析**:\n")
+                user_parts.append(f"- **受影响函数总数**: {call_graph.get('total_modified_functions', 0)}\n")
+                user_parts.append(f"- **调用者（使用这些函数的模块）**: {call_graph.get('total_callers', 0)}个\n")
+                user_parts.append(f"- **被调用者（这些函数依赖的模块）**: {call_graph.get('total_callees', 0)}个\n\n")
+                
+                # Add file-level details
+                if call_graph.get('file_details'):
+                    user_parts.append("**按文件分类**:\n")
+                    for file_path, file_info in call_graph['file_details'].items():
+                        modified_count = file_info.get('modified_count', 0)
+                        modified_functions = file_info.get('modified_functions', [])
+                        user_parts.append(f"#### {file_path}\n")
+                        user_parts.append(f"- **修改函数数**: {modified_count}\n")
+                        if modified_functions:
+                            user_parts.append(f"- **修改的函数**: {', '.join(modified_functions)}\n")
+                        user_parts.append("\n")
+                user_parts.append("\n")
         
         # Add context
         user_parts.append("**Relevant Code Context**:\n")
         user_parts.append(context)
         
-        # Add instruction
+# Add instruction
         if self.enable_multi_turn and dialogue_history is not None:
             instruction = ("\n**Instructions**: Please answer the question using the code snippets above only if they are relevant. "
                          "The code may not always be helpful, so focus on the question itself and refer to specific files or code elements only when necessary. "
                          "Remember to include the summary at the end as specified.")
         else:
-            instruction = ("\n**Instructions**: Please answer the question using the code snippets above only if they are relevant. "
-                         "The code may not always be helpful, so focus on the question itself and refer to specific files or code elements only when necessary. ")
-
+            # Standard instruction
+            instruction = ("\n**Instructions**: Please answer the question using the code snippets above only if they are relevant.")
+        
+        # Special instruction for commit review
+        if query_info and "commit_info" in query_info:
+            instruction += ("\n\n**重要**: 如果这是一个 commit 检视请求，请按照以下格式生成报告：\n\n"
+                          "## Commit 检视报告\n\n"
+                          "### 基本信息\n"
+                          "- **Commit**: [commit_hash]\n"
+                          "- **消息**: [commit message]\n\n"
+                          "### 变更分析\n"
+                          "- **修改文件数**: [number]\n"
+                          "- **受影响函数**: [number]\n"
+                          "- **影响范围**:\n"
+                          "  - 调用者（使用这些函数的模块）: [number]个\n"
+                          "  - 被调用者（这些函数依赖的模块）: [number]个\n\n"
+                          "### 按文件分类\n"
+                          "#### [file_path]\n"
+                          "- **修改函数数**: [number]\n"
+                          "- **修改的函数**: [function1, function2, ...]\n"
+                          "- **影响**: [brief description]\n\n"
+                          "### 影响范围分析\n"
+                          "通过调用图分析发现：\n"
+                          "- ✅ 该修改影响了 **[number]个调用者**，包括：\n"
+                          "  - [caller1]\n"
+                          "  - [caller2]\n"
+                          "  - ...\n\n"
+                          "- ✅ 该修改依赖 **[number]个被调用者**，包括：\n"
+                          "  - [callee1]\n"
+                          "  - [callee2]\n"
+                          "  - ...\n\n"
+                          "### 建议\n"
+                          "- [suggestion1]\n"
+                          "- [suggestion2]")
+        
         user_parts.append(instruction)
         
         user_prompt = "\n".join(user_parts)

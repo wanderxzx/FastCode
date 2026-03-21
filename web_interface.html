@@ -682,6 +682,7 @@
         }
 
         try {
+            console.log('Sending query with commit_hash:', state.selectedCommit); // Debug log
             const response = await fetch('/api/query-stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

@@ -58,13 +58,20 @@ parser:
 
 # Embedding Settings
 embedding:
-  model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"  # Multilingual support (470MB)
+  # 方式1：直接指定已下载的模型目录（推荐，离线使用）
+  # 指向包含 snapshots 文件夹的目录
+  model: "C:/Users/wandererzx/.cache/huggingface/hub/models--sentence-transformers--paraphrase-multilingual-MiniLM-L12-v2"
+  
+  # 方式2：使用模型名称（会从 cache_folder 加载）
+  # model: "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"  # Multilingual support (470MB)
   # model: "sentence-transformers/all-MiniLM-L6-v2"  # Faster download but English only (90MB)
-  # Alternative: "BAAI/bge-large-en-v1.5" for better quality
+  # model: "BAAI/bge-large-en-v1.5"  # Better quality
+  
   device: "auto"  # "auto" (recommended), "cuda", "mps", or "cpu"
   batch_size: 32
   max_seq_length: 512
   normalize_embeddings: true
+  cache_folder: "./data/models"  # Cache directory for online model download
 
 # Indexing Settings
 indexing:
