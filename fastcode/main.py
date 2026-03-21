@@ -460,6 +460,7 @@ class FastCode:
                     "keywords": getattr(processed_query, "keywords", None),
                     "repo_filter": repo_filter,
                     "multi_turn": enable_multi_turn,
+                    "commit_hash": commit_hash,  # Save commit_hash for context
                 }
                 serializable_metadata = self._ensure_jsonable_metadata(metadata)
 
@@ -654,6 +655,7 @@ class FastCode:
                     "keywords": getattr(processed_query, "keywords", None),
                     "repo_filter": repo_filter,
                     "multi_turn": enable_multi_turn,
+                    "commit_hash": commit_hash,  # Save commit_hash for context
                 })
 
                 self.cache_manager.save_dialogue_turn(

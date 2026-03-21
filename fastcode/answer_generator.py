@@ -580,20 +580,29 @@ Symbol Mappings:
         # Add dialogue history context if available
         if dialogue_history and len(dialogue_history) > 0:
             user_parts.append("**Previous Conversation Context**:")
-            
+
+            # Check if this is a commit analysis session
+            has_commit_context = any(turn.get("metadata", {}).get("commit_hash") for turn in dialogue_history)
+            if has_commit_context:
+                user_parts.append("\n*注: 这是一个持续针对特定 commit 的分析对话*")
+
             # Only include recent turns (limited by context_rounds)
             recent_history = dialogue_history[-self.context_rounds:] if len(dialogue_history) > self.context_rounds else dialogue_history
-            
+
             for turn in recent_history:
                 turn_num = turn.get("turn_number", 0)
                 prev_query = turn.get("query", "")
                 prev_summary = turn.get("summary", "")
-                
+                turn_metadata = turn.get("metadata", {})
+                turn_commit_hash = turn_metadata.get("commit_hash")
+
                 user_parts.append(f"\n**Turn {turn_num}**")
+                if turn_commit_hash:
+                    user_parts.append(f"(Commit: {turn_commit_hash})")
                 user_parts.append(f"User: {prev_query}")
                 if prev_summary:
                     user_parts.append(f"Summary: {prev_summary}")
-            
+
             user_parts.append("\n---\n")
         
         # Add current query
@@ -689,10 +698,11 @@ Symbol Mappings:
         else:
             # Standard instruction
             instruction = ("\n**Instructions**: Please answer the question using the code snippets above only if they are relevant.")
-        
+
         # Special instruction for commit review
         if query_info and "commit_info" in query_info:
-            instruction += ("\n\n**重要**: 如果这是一个 commit 检视请求，请按照以下格式生成报告：\n\n"
+            instruction += ("\n\n**重要**: 你正在进行 commit 检视分析。"
+                          "如果是第一次查询，请按照以下格式生成检视报告：\n\n"
                           "## Commit 检视报告\n\n"
                           "### 基本信息\n"
                           "- **Commit**: [commit_hash]\n"
@@ -720,7 +730,10 @@ Symbol Mappings:
                           "  - ...\n\n"
                           "### 建议\n"
                           "- [suggestion1]\n"
-                          "- [suggestion2]")
+                          "- [suggestion2]\n\n"
+                          "**重要提示**: 如果这是后续的对话（例如用户要求提供修改建议、分析影响等），"
+                          "请基于之前的检视报告内容继续回答，不需要重新生成完整的报告格式。"
+                          "用户可能已经看到了检视报告，现在想要更深入的分析或建议。")
         
         user_parts.append(instruction)
         
