@@ -424,8 +424,10 @@ class FastCode:
                 # Enhance with call graph context for commit analysis
                 if commit_info and commit_info.get('file_diffs'):
                     self.logger.info("Enhancing retrieval with call graph context for commit analysis")
-                    retrieved = self._enhance_with_call_graph_context(retrieved, commit_info)
-                
+                    retrieved, call_graph_stats = self._enhance_with_call_graph_context(retrieved, commit_info)
+                    if call_graph_stats:
+                        commit_info['call_graph_analysis'] = call_graph_stats
+
                 # Generate answer (with dialogue history for multi-turn)
                 # Add commit_info to query_info if available
                 query_info_dict = processed_query.to_dict()
