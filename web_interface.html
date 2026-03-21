@@ -529,7 +529,9 @@
             line.textContent = state.availableRepos.length > 0 ? "Repositories found on disk." : "No repositories found.";
         }
         
-        const canSend = state.ready && state.selectedRepos.length > 0 && !state.isSending;
+        const canSend = state.ready &&
+                       ((state.selectedRepos.length > 0) || (state.selectedCommit && state.selectedCommitRepo)) &&
+                       !state.isSending;
         document.getElementById('message-input').disabled = !canSend;
         document.getElementById('send-btn').disabled = !canSend;
     }
@@ -609,6 +611,7 @@
         const input = document.getElementById('message-input');
         const question = input.value.trim();
         if (!question || !state.ready) return;
+        if (state.selectedRepos.length === 0 && !state.selectedCommit) return;
 
         if (!state.sessionId) await startNewSession();
 
@@ -683,12 +686,17 @@
 
         try {
             console.log('Sending query with commit_hash:', state.selectedCommit); // Debug log
+            // Determine repo_filter: use selectedCommitRepo if commit is selected, otherwise use selectedRepos
+            const repoFilter = state.selectedCommit
+                ? (state.selectedCommitRepo ? [state.selectedCommitRepo] : state.selectedRepos)
+                : state.selectedRepos;
+
             const response = await fetch('/api/query-stream', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     question,
-                    repo_filter: state.selectedRepos,
+                    repo_filter: repoFilter,
                     multi_turn: state.chatMode,
                     session_id: state.sessionId,
                     commit_hash: state.selectedCommit
