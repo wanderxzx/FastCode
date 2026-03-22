@@ -1,92 +1,64 @@
 ---
 name: fastcode
-description: FastCode代码理解和Commit检视Skill。使用场景：(1) 分析仓库代码结构 (2) 理解模块功能 (3) Commit代码检视 (4) 代码问题排查。提供load、index、reindex、query、commit_review等核心函数。
+description: Code commit review skill using RAG and tree-sitter. Use when: "review this commit", "analyze this change", "check commit impact", "find code", "understand this repository". Supports Python, JS/TS, C/C++, Java, Go, Rust, C#.
 ---
 
-# FastCode Skill
-
-基于FastCode的代码理解和Commit检视能力。
-
-## 环境配置
-
-### FASTCODE_PATH 环境变量
-
-Skill 通过 `FASTCODE_PATH` 环境变量定位 FastCode 本体：
-
-```bash
-export FASTCODE_PATH="/path/to/your/fastcode"
-```
+# FastCode - Commit 检视 Skill
 
 ## 快速开始
 
+### 调用方式
+
 ```python
-import sys
-from pathlib import Path
+import sys, os
 
-script_dir = Path(__file__).parent / "scripts"
-sys.path.insert(0, str(script_dir))
+# 获取 scripts 目录路径（SKILL.md 所在目录的下一级）
+skill_dir = "/path/to/fastcode"  # 替换为实际的 SKILL.md 所在目录
+scripts_dir = os.path.join(skill_dir, "scripts")
+sys.path.insert(0, scripts_dir)
 
-from fastcode_skill import (
-    load_and_index, 
-    review_commit,
-    get_commits,
-    reindex
+from reviewer import review_commit
+
+report_path = review_commit(
+    question="检视这笔 commit",
+    commit_hash="abc1234",
+    repo_path="/path/to/repo"
 )
-
-# 1. 加载仓库
-load_and_index("/path/to/repo")
-
-# 2. Commit检视（返回标准化报告）
-commits = get_commits(max_count=10)
-result = review_commit("帮我检视一下这个commit", commits["commits"][0]["short_hash"])
-print(result["answer"])
 ```
 
-## 重要：代码修改后必须reindex
+reviewer.py 会自动加载 `.env` 并设置模型缓存路径。
 
-```python
-# 代码修改后，重新索引才能获取准确的Call Graph分析
-reindex()
+### 工作流程
+
+```
+load_and_index(repo_path)  ← 第一步
+    ↓
+review_commit(question, commit_hash)  ← 生成检视报告
 ```
 
-## API参考
+---
 
-### 仓库管理
+## 配置
 
-| 函数 | 说明 |
+在 `fastcode/.env` 中配置：
+
+```bash
+LLM_API_KEY=sk-your-key
+LLM_PROVIDER=openai  # 或 anthropic
+LLM_MODEL=gpt-4
+```
+
+### 默认路径
+
+| 类型 | 位置 |
 |------|------|
-| `load_repository(source)` | 加载仓库（不索引） |
-| `index_repository(force)` | 索引仓库 |
-| `reindex()` | ⚠️ 重新索引（重建Call Graph） |
-| `load_and_index(source, force)` | 加载并索引 |
+| 模型缓存 | `{skill_dir}/data/model/` |
+| 仓库索引 | `{repo}/.fastcode_index/` |
 
-### Commit检视
+---
 
-| 函数 | 说明 |
-|------|------|
-| `review_commit(question, commit_hash, output_dir)` | ⭐ Commit检视，返回标准化报告格式 |
-| `get_commits(max_count)` | 获取提交历史 |
-| `get_commit_diff(commit_hash)` | 获取变更内容 |
+## 详细文档
 
-**review_commit 返回值**:
-- `answer`: 检视报告文本
-- `report_file`: 📄 报告文件路径（自动生成markdown文件）
-
-**报告文件**: 检视结果会自动保存为 `commit_review_{hash}_{timestamp}.md`，方便分享和存档。
-
-### 查询
-
-| 函数 | 说明 |
-|------|------|
-| `query(question, session_id, enable_multi_turn, commit_hash)` | 代码查询，直接返回FastCode结果 |
-
-### 系统
-
-| 函数 | 说明 |
-|------|------|
-| `get_status()` | 获取系统状态 |
-| `health_check()` | 健康检查 |
-
-## 配置指南
-
-详见 [references/config.md](references/config.md)
+- [API 参考](references/api.md) - 方法说明、参数详解
+- [使用示例](references/examples.md) - 完整代码示例
+- [Prompt 模板](references/prompts.md) - LLM prompt 配置
