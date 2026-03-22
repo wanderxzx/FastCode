@@ -975,7 +975,8 @@ class FastCode:
                         # 记录具体的 caller 名称
                         if func_name not in call_graph_stats['callers']:
                             call_graph_stats['callers'][func_name] = []
-                        call_graph_stats['callers'][func_name].append(caller_name)
+                        if len(call_graph_stats['callers'][func_name]) < 50:
+                            call_graph_stats['callers'][func_name].append(caller_name)
 
                 # Get callees (functions called by this function)
                 callees = self.graph_builder.get_callees(elem_id)
@@ -1001,7 +1002,8 @@ class FastCode:
                         # 记录具体的 callee 名称
                         if func_name not in call_graph_stats['callees']:
                             call_graph_stats['callees'][func_name] = []
-                        call_graph_stats['callees'][func_name].append(callee_name)
+                        if len(call_graph_stats['callees'][func_name]) < 50:
+                            call_graph_stats['callees'][func_name].append(callee_name)
 
         if added_elements_count > 0:
             self.logger.info(f"Enhanced retrieval with {added_elements_count} call graph elements")
