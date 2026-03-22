@@ -39,32 +39,12 @@ class CodeEmbedder:
         """Load sentence transformer model"""
         import os
         import re
-        
-        # 检查用户指定的路径是否直接指向模型目录
-        # 如果路径包含 "snapshots" 或 "models--"，说明是完整路径
-        if "snapshots" in self.model_name or "models--" in self.model_name:
-            # 用户指定了包含 snapshots 的路径，需要找到实际的模型目录
-            model_path = self.model_name
-            
-            # 如果路径指向 models--xxx 目录，需要找到 snapshots 下的实际目录
-            if "models--" in model_path and "snapshots" not in model_path:
-                snapshots_dir = os.path.join(model_path, "snapshots")
-                if os.path.exists(snapshots_dir):
-                    # 找到 snapshots 下的实际模型目录
-                    for item in os.listdir(snapshots_dir):
-                        item_path = os.path.join(snapshots_dir, item)
-                        if os.path.isdir(item_path) and os.path.exists(os.path.join(item_path, "config.json")):
-                            model_path = item_path
-                            self.logger.info(f"Found model snapshot at: {model_path}")
-                            break
-            
-            self.logger.info(f"Loading model from direct path: {model_path}")
-            model = SentenceTransformer(
-                model_path,
-                device=self.device
-            )
-        else:
-            # 用户指定的是模型名称，使用缓存
+
+        # 用户指定的是模型名称，使用缓存, 不存在则先下载
+        name_splits = self.model_name.split("/")
+        model_path = self.cache_folder + "/" + f"models--{name_splits[0]}--{name_splits[1]}"
+
+        if not os.path.exists(model_path):
             os.makedirs(self.cache_folder, exist_ok=True)
             
             # Set environment variable to force huggingface to use our cache
@@ -78,7 +58,23 @@ class CodeEmbedder:
                 device=self.device,
                 cache_folder=self.cache_folder
             )
-        
+        else:
+            snapshots_dir = os.path.join(model_path, "snapshots")
+            if os.path.exists(snapshots_dir):
+                # 找到 snapshots 下的实际模型目录
+                for item in os.listdir(snapshots_dir):
+                    item_path = os.path.join(snapshots_dir, item)
+                    if os.path.isdir(item_path) and os.path.exists(os.path.join(item_path, "config.json")):
+                        model_path = item_path
+                        self.logger.info(f"Found model snapshot at: {model_path}")
+                        break
+            
+            self.logger.info(f"Loading model from direct path: {model_path}")
+            model = SentenceTransformer(
+                model_path,
+                device=self.device
+            )
+
         model.max_seq_length = self.max_seq_length
         return model
     

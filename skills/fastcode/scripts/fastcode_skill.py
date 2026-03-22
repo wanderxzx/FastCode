@@ -299,11 +299,14 @@ def get_commit_diff(commit_hash: str) -> Dict[str, Any]:
     except Exception as e:
         return {"error": str(e)}
 
-
+# ============================================================
+# Commit检视报告 - 标准化格式
+# ============================================================
 def review_commit(
     question: str,
     commit_hash: str,
-    use_agency_mode: bool = False
+    use_agency_mode: bool = False,
+    output_dir: str = None
 ) -> Dict[str, Any]:
     """
     Commit检视（参考web_app commit分析流程）
@@ -312,15 +315,20 @@ def review_commit(
         question: 分析问题
         commit_hash: Commit Hash
         use_agency_mode: 启用Agency模式
+        output_dir: 报告输出目录（默认: workspace目录）
     
     Returns:
-        FastCode原始分析结果
+        FastCode原始分析结果，包含 report_file 字段（报告文件路径）
     """
     try:
         fc = _get_fastcode()
         
-        # 获取diff信息
-        diff = fc.get_commit_diff(commit_hash)
+        # 获取 commit 基本信息
+        commit_info = fc.get_commit_diff(commit_hash)
+        # 只取第一行（subject），避免截断问题
+        raw_msg = commit_info.get('message', '') if commit_info else ''
+        commit_msg = raw_msg.split('\n')[0].strip()[:80] if raw_msg else ''
+        commit_short = commit_info.get('short_hash', commit_hash) if commit_info else commit_hash
         
         # 执行查询
         result = fc.query(
@@ -329,54 +337,115 @@ def review_commit(
             use_agency_mode=use_agency_mode
         )
         
+        # 生成报告文件
+        report_file = _generate_commit_review_report(
+            commit_hash=commit_short,
+            commit_msg=commit_msg,
+            answer=result.get('answer', ''),
+            output_dir=output_dir
+        )
+        
+        # 添加报告文件路径到结果
+        result['report_file'] = report_file
+        
         return result
     except Exception as e:
         return {"answer": f"Error: {str(e)}", "query": question, "error": str(e)}
 
 
-# ============================================================
-# Commit检视报告 - 标准化格式
-# ============================================================
-
-COMMIT_REVIEW_PROMPT = """请检视以下Commit，提供包含以下内容的报告：
-
-1. **基本信息**：Commit ID、消息、变更文件数
-2. **变更分析**：
-   - 修改文件数、受影响函数数
-   - 影响范围（调用者、被调用者数量）
-3. **按文件分类**：每个修改文件的详情
-4. **详细分析**：
-   - 主要改动是什么
-   - 涉及了哪些文件和模块
-   - 有没有潜在问题或风险
-5. **代码质量评估**：可读性、可维护性、健壮性等
-6. **结论与建议**：推荐行动、改进点
-
-请直接输出报告，不要有其他多余内容。"""
-
-
-def commit_review(commit_hash: str) -> Dict[str, Any]:
+def _generate_commit_review_report(
+    commit_hash: str,
+    commit_msg: str,
+    answer: str,
+    output_dir: str = None
+) -> str:
     """
-    Commit检视 - 标准化报告格式
+    生成Commit检视报告文件
     
     Args:
-        commit_hash: Commit Hash
+        commit_hash: Commit短哈希
+        commit_msg: Commit消息
+        answer: 检视分析内容
+        output_dir: 输出目录
     
     Returns:
-        包含标准化格式报告的FastCode结果
+        报告文件路径
     """
-    try:
-        fc = _get_fastcode()
-        
-        result = fc.query(
-            question=COMMIT_REVIEW_PROMPT,
-            commit_hash=commit_hash,
-            use_agency_mode=False
-        )
-        
-        return result
-    except Exception as e:
-        return {"answer": f"Error: {str(e)}", "error": str(e)}
+    import os
+    from datetime import datetime
+    
+    # 确定输出目录
+    if output_dir is None:
+        output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))), 'workspace')
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # 生成文件名
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f"commit_review_{commit_hash}_{timestamp}.md"
+    filepath = os.path.join(output_dir, filename)
+    
+    # 简化清理：移除开头的标题节（如果有）
+    lines = answer.strip().split('\n')
+    
+    # 移除开头的报告标题和基本信息节
+    skip_patterns = [
+        '# Commit 检视报告', '## Commit 检视报告',
+        '### 基本信息', '## 基本信息',
+        '## Commit 信息', '# Commit ',
+    ]
+    
+    start_idx = 0
+    for i, line in enumerate(lines[:10]):
+        stripped = line.strip()
+        for pattern in skip_patterns:
+            if stripped.startswith(pattern):
+                start_idx = i + 1
+                # 跳过空行
+                while start_idx < len(lines) and not lines[start_idx].strip():
+                    start_idx += 1
+                break
+        if start_idx > 0:
+            break
+    
+    cleaned_lines = lines[start_idx:] if start_idx > 0 else lines
+    
+    # 清理连续空行
+    result = []
+    prev_empty = False
+    for line in cleaned_lines:
+        stripped = line.strip()
+        if stripped == '':
+            if not prev_empty:
+                result.append(line)
+            prev_empty = True
+        else:
+            result.append(line)
+            prev_empty = False
+    
+    cleaned_answer = '\n'.join(result)
+    
+    # 生成报告内容
+    report_content = f"""# Commit 检视报告
+
+**Commit**: `{commit_hash}`  
+**消息**: {commit_msg}  
+**时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+---
+
+{cleaned_answer}
+
+---
+
+*报告由 FastCode Skill 自动生成*
+"""
+    
+    # 写入文件
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(report_content)
+    
+    return filepath
 
 
 # ============================================================

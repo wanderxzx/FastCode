@@ -904,7 +904,9 @@ class FastCode:
             'total_modified_functions': 0,
             'total_callers': 0,
             'total_callees': 0,
-            'file_details': {}
+            'file_details': {},
+            'callers': {},  # {modified_func: [caller1, caller2, ...]}
+            'callees': {}  # {modified_func: [callee1, callee2, ...]}
         }
 
         # For each modified file, find related functions through call graph
@@ -959,6 +961,7 @@ class FastCode:
 
                     caller_elem = self.graph_builder.element_by_id.get(caller_id)
                     if caller_elem:
+                        caller_name = caller_elem.name
                         element_ids.add(caller_id)
                         retrieved.append({
                             'element': caller_elem.to_dict(),
@@ -969,6 +972,10 @@ class FastCode:
                         })
                         added_elements_count += 1
                         call_graph_stats['total_callers'] += 1
+                        # 记录具体的 caller 名称
+                        if func_name not in call_graph_stats['callers']:
+                            call_graph_stats['callers'][func_name] = []
+                        call_graph_stats['callers'][func_name].append(caller_name)
 
                 # Get callees (functions called by this function)
                 callees = self.graph_builder.get_callees(elem_id)
@@ -980,6 +987,7 @@ class FastCode:
 
                     callee_elem = self.graph_builder.element_by_id.get(callee_id)
                     if callee_elem:
+                        callee_name = callee_elem.name
                         element_ids.add(callee_id)
                         retrieved.append({
                             'element': callee_elem.to_dict(),
@@ -990,6 +998,10 @@ class FastCode:
                         })
                         added_elements_count += 1
                         call_graph_stats['total_callees'] += 1
+                        # 记录具体的 callee 名称
+                        if func_name not in call_graph_stats['callees']:
+                            call_graph_stats['callees'][func_name] = []
+                        call_graph_stats['callees'][func_name].append(callee_name)
 
         if added_elements_count > 0:
             self.logger.info(f"Enhanced retrieval with {added_elements_count} call graph elements")

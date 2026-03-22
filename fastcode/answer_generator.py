@@ -684,6 +684,36 @@ Symbol Mappings:
                         if modified_functions:
                             user_parts.append(f"- **修改的函数**: {', '.join(modified_functions)}\n")
                         user_parts.append("\n")
+                
+                # Add specific caller/callee names
+                callers_map = call_graph.get('callers', {})
+                callees_map = call_graph.get('callees', {})
+                
+                if callers_map or callees_map:
+                    user_parts.append("**具体调用关系**:\n")
+                    
+                    if callers_map:
+                        user_parts.append("### 📤 调用者（使用这些函数的模块）\n")
+                        for func_name, caller_list in callers_map.items():
+                            if caller_list:
+                                user_parts.append(f"- **{func_name}** 被以下函数调用:\n")
+                                for caller in caller_list[:10]:  # 限制最多10个
+                                    user_parts.append(f"  - `{caller}`\n")
+                                if len(caller_list) > 10:
+                                    user_parts.append(f"  - ... 还有 {len(caller_list) - 10} 个\n")
+                                user_parts.append("\n")
+                    
+                    if callees_map:
+                        user_parts.append("### 📥 被调用者（这些函数依赖的模块）\n")
+                        for func_name, callee_list in callees_map.items():
+                            if callee_list:
+                                user_parts.append(f"- **{func_name}** 调用了以下函数:\n")
+                                for callee in callee_list[:10]:  # 限制最多10个
+                                    user_parts.append(f"  - `{callee}`\n")
+                                if len(callee_list) > 10:
+                                    user_parts.append(f"  - ... 还有 {len(callee_list) - 10} 个\n")
+                                user_parts.append("\n")
+                
                 user_parts.append("\n")
         
         # Add context
@@ -701,38 +731,30 @@ Symbol Mappings:
 
         # Special instruction for commit review
         if query_info and "commit_info" in query_info:
-            instruction += ("\n\n**重要**: 你正在进行 commit 检视分析。"
-                          "如果是第一次查询，请按照以下格式生成检视报告：\n\n"
-                          "## Commit 检视报告\n\n"
-                          "### 基本信息\n"
-                          "- **Commit**: [commit_hash]\n"
-                          "- **消息**: [commit message]\n\n"
-                          "### 变更分析\n"
+            instruction += ("\n\n**重要**: 你正在进行 commit 检视分析。请按以下精简格式输出：\n\n"
+                          "**注意**: 不要输出报告标题和基本信息，这些会由系统自动添加。直接开始输出正文。\n\n"
+                          "## 变更分析\n"
                           "- **修改文件数**: [number]\n"
                           "- **受影响函数**: [number]\n"
-                          "- **影响范围**:\n"
-                          "  - 调用者（使用这些函数的模块）: [number]个\n"
-                          "  - 被调用者（这些函数依赖的模块）: [number]个\n\n"
-                          "### 按文件分类\n"
-                          "#### [file_path]\n"
-                          "- **修改函数数**: [number]\n"
-                          "- **修改的函数**: [function1, function2, ...]\n"
-                          "- **影响**: [brief description]\n\n"
-                          "### 影响范围分析\n"
-                          "通过调用图分析发现：\n"
-                          "- ✅ 该修改影响了 **[number]个调用者**，包括：\n"
-                          "  - [caller1]\n"
-                          "  - [caller2]\n"
-                          "  - ...\n\n"
-                          "- ✅ 该修改依赖 **[number]个被调用者**，包括：\n"
-                          "  - [callee1]\n"
-                          "  - [callee2]\n"
-                          "  - ...\n\n"
-                          "### 建议\n"
-                          "- [suggestion1]\n"
-                          "- [suggestion2]\n\n"
-                          "**重要提示**: 如果这是后续的对话（例如用户要求提供修改建议、分析影响等），"
-                          "请基于之前的检视报告内容继续回答，不需要重新生成完整的报告格式。"
+                          "- **影响范围**: 调用者 [number] 个，被调用者 [number] 个\n\n"
+                          "## 按文件分类\n"
+                          "### [file_path]\n"
+                          "- 修改函数: [function1, function2]\n"
+                          "- 影响: [brief description]\n\n"
+                          "## 影响范围分析\n"
+                          "⚠️ **必须使用表格格式**！\n\n"
+                          "### 📤 调用者\n"
+                          "| 被调用的函数 | 调用者 | 位置 |\n"
+                          "|-------------|--------|------|\n"
+                          "| func1 | caller1 | file:line |\n\n"
+                          "### 📥 被调用者\n"
+                          "| 修改的函数 | 被调用的依赖 | 说明 |\n"
+                          "|-----------|------------|------|\n"
+                          "| func1 | callee1 | description |\n\n"
+                          "## 建议\n"
+                          "- [建议1]\n"
+                          "- [建议2]\n\n"
+                          "**提示**: 如果是后续对话（用户要求分析影响、提出建议等），直接回答即可，不需要重复报告格式。"
                           "用户可能已经看到了检视报告，现在想要更深入的分析或建议。")
         
         user_parts.append(instruction)
@@ -749,6 +771,17 @@ Symbol Mappings:
     def _truncate_context(self, context: str, max_tokens: int) -> str:
         """Truncate context to fit within token limit"""
         return truncate_to_tokens(context, max_tokens, self.model)
+    
+    def _strip_think_content(self, content: str) -> str:
+        """Remove think content blocks (e.g., <think>...</think> or thinking tags) from LLM response"""
+        import re
+        # 移除 <think>...</think> 格式
+        content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+        # 移除 <thinking>...</thinking> 格式
+        content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
+        # 清理多余的空行
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        return content.strip()
     
     def _generate_openai(self, prompt: str) -> str:
         """Generate answer using OpenAI"""
@@ -774,6 +807,10 @@ Symbol Mappings:
             content = getattr(message, "content", None) if message else None
             if content is None:
                 raise ValueError(f"LLM response has no content: {response}")
+            
+            # 过滤掉 think 内容（如 <think>...</think> 或 <think>...</think>）
+            content = self._strip_think_content(content)
+            
             return content
 
         except Exception as e:
