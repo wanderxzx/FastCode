@@ -619,19 +619,14 @@ Symbol Mappings:
             user_parts.append("\n**Commit Information**:\n")
             user_parts.append(f"Commit: `{commit_info.get('short_hash', 'unknown')}`\n")
             
-            # Add commit message/summary
+            # Add commit message/summary (first line only to save tokens)
             message = commit_info.get('message', '') or commit_info.get('summary', '')
             if message:
-                user_parts.append(f"Message: {message}\n\n")
+                # Take first line of message only
+                first_line = message.split('\n')[0][:200]  # Limit to 200 chars
+                user_parts.append(f"Message: {first_line}\n\n")
             
-            # Add changed files
-            if commit_info.get('changed_files'):
-                user_parts.append("**Changed Files**:\n")
-                for file in commit_info['changed_files']:
-                    user_parts.append(f"- `{file['path']}` ({file['change_type']}, +{file.get('additions', 0)}/-{file.get('deletions', 0)})\n")
-                user_parts.append("\n")
-            
-            # Add code changes (diff)
+            # Add code changes (diff) - includes file info
             if commit_info.get('file_diffs'):
                 user_parts.append("**Code Changes**:\n")
                 file_count = 0

@@ -164,6 +164,17 @@ class FastCode:
             self.repo_loaded = True
             self.repo_info = self.loader.get_repository_info()
             
+            # Register in loaded_repositories for commit operations (fixes get_commit_diff)
+            if self.repo_info:
+                repo_name = self.repo_info.get("name", "default")
+                self.loaded_repositories[repo_name] = {
+                    "name": repo_name,
+                    "path": self.loader.repo_path,
+                    "file_count": self.repo_info.get("file_count", 0),
+                    "total_size_mb": self.repo_info.get("total_size_mb", 0),
+                }
+                self.logger.info(f"Registered repository '{repo_name}' in loaded_repositories")
+            
             # CRITICAL: Update config with the actual repo path.
             # This ensures path_utils can correctly normalize paths relative to the root.
             if self.loader.repo_path:
@@ -383,23 +394,25 @@ class FastCode:
                     and self.retriever.iterative_agent is not None
                 )
 
-                # Process query: skip query_processor entirely in iterative mode
-                if use_iterative_enhancement:
-                    # Iterative agent will handle all query enhancement
-                    # Create minimal ProcessedQuery object
+                # Process query: skip query_processor in iterative mode or commit review mode
+                if use_iterative_enhancement or commit_hash:
+                    # Iterative agent or commit review: create minimal ProcessedQuery
                     from .query_processor import ProcessedQuery
                     processed_query = ProcessedQuery(
                         original=question,
                         expanded=question,
                         keywords=[],
-                        intent="unknown",
+                        intent="commit_review" if commit_hash else "unknown",
                         subqueries=[],
                         filters=filters or {},
                         rewritten_query=None,
                         pseudocode_hints=None,
                         search_strategy=None
                     )
-                    self.logger.info("Iterative mode: skipping query_processor, all enhancements handled by iterative_agent")
+                    if use_iterative_enhancement:
+                        self.logger.info("Iterative mode: skipping query_processor")
+                    if commit_hash:
+                        self.logger.info(f"Commit review mode: skipping query_processor for {commit_hash}")
                 else:
                     # Standard mode: use full query processing
                     processed_query = self.query_processor.process(
@@ -564,20 +577,24 @@ class FastCode:
                 and self.retriever.iterative_agent is not None
             )
 
-            if use_iterative_enhancement:
+            # For commit review, skip query_processor (intentional analysis not needed)
+            if use_iterative_enhancement or commit_hash:
                 from .query_processor import ProcessedQuery
                 processed_query = ProcessedQuery(
                     original=question,
                     expanded=question,
                     keywords=[],
-                    intent="unknown",
+                    intent="commit_review" if commit_hash else "unknown",
                     subqueries=[],
                     filters=filters or {},
                     rewritten_query=None,
                     pseudocode_hints=None,
                     search_strategy=None
                 )
-                self.logger.info("Iterative mode: skipping query_processor, all enhancements handled by iterative_agent")
+                if use_iterative_enhancement:
+                    self.logger.info("Iterative mode: skipping query_processor")
+                if commit_hash:
+                    self.logger.info(f"Commit review mode: skipping query_processor for {commit_hash}")
             else:
                 processed_query = self.query_processor.process(
                     question,
