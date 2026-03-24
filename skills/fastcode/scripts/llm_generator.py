@@ -46,11 +46,10 @@ class LLMGenerator:
         self.max_context_tokens = self.gen_config.get("max_context_tokens", 200000)
         self.reserve_tokens = self.gen_config.get("reserve_tokens_for_response", 10000)
         
-        # API keys and endpoints from environment
-        self.api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-        self.anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-        self.base_url = os.getenv("LLM_BASE_URL") or os.getenv("OPENAI_BASE_URL")
-        self.model = os.getenv("LLM_MODEL") or os.getenv("MODEL") or self.gen_config.get("model", "gpt-4")
+        # API keys and endpoints from environment (unified LLM_API_KEY)
+        self.api_key = os.getenv("LLM_API_KEY")
+        self.base_url = os.getenv("LLM_BASE_URL")
+        self.model = os.getenv("LLM_MODEL") or self.gen_config.get("model", "gpt-4")
         
         # Initialize client
         self.client = self._initialize_client()
@@ -78,9 +77,9 @@ class LLMGenerator:
                     return None
         
         elif self.provider == "anthropic":
-            api_key = self.anthropic_api_key
+            api_key = self.api_key
             if not api_key:
-                self.logger.warning("ANTHROPIC_API_KEY not set")
+                self.logger.warning("LLM_API_KEY not set")
             try:
                 from anthropic import Anthropic
                 return Anthropic(api_key=api_key, base_url=self.base_url)
