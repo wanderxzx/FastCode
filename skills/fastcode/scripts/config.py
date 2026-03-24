@@ -9,9 +9,9 @@ class SkillConfig:
     """FastCode Commit Review Skill configuration"""
     
     def __init__(self):
-        # Default model cache location: skill/data/model/
+        # Default model cache location: skill/data/models/
         _skill_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        _default_cache = os.path.join(_skill_dir, "data", "model")
+        _default_cache = os.path.join(_skill_dir, "data", "models")
         
         # Only use env var if it's an absolute path
         _env_cache = os.getenv("EMBEDDING_CACHE", "")

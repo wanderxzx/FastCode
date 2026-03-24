@@ -89,7 +89,7 @@ Guidelines:
 The `PromptBuilder` class constructs prompts:
 
 ```python
-from skills.fastcode.scripts.prompt_builder import PromptBuilder
+from prompt_builder import PromptBuilder
 
 builder = PromptBuilder()
 
